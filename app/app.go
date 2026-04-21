@@ -18,7 +18,6 @@ import (
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/mattn/go-runewidth"
 )
 
 // Run is the main entrypoint into the application.
@@ -445,9 +444,6 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 
 			return m, tea.Batch(tea.WindowSize(), m.instanceChanged(), startCmd)
 		case tea.KeyRunes:
-			if runewidth.StringWidth(instance.Title) >= 32 {
-				return m, m.handleError(fmt.Errorf("title cannot be longer than 32 characters"))
-			}
 			if err := instance.SetTitle(instance.Title + string(msg.Runes)); err != nil {
 				return m, m.handleError(err)
 			}

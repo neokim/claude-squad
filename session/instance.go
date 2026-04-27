@@ -330,6 +330,16 @@ func (i *Instance) HasUpdated() (updated bool, hasPrompt bool) {
 	return i.tmuxSession.HasUpdated()
 }
 
+// HasNewBell reports whether the underlying program emitted a terminal BEL
+// since the last call. Used to surface OS-level notifications when a Claude
+// Code session signals task completion.
+func (i *Instance) HasNewBell() bool {
+	if !i.started || i.Status == Paused {
+		return false
+	}
+	return i.tmuxSession.HasNewBell()
+}
+
 // CheckAndHandleTrustPrompt checks for and dismisses the trust prompt for supported programs.
 func (i *Instance) CheckAndHandleTrustPrompt() bool {
 	if !i.started || i.tmuxSession == nil {

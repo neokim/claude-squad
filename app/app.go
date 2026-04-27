@@ -4,6 +4,7 @@ import (
 	"claude-squad/config"
 	"claude-squad/keys"
 	"claude-squad/log"
+	"claude-squad/notify"
 	"claude-squad/session"
 	"claude-squad/session/git"
 	"claude-squad/ui"
@@ -243,6 +244,13 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				r.instance.TapEnter()
 			} else {
 				r.instance.SetStatus(session.Ready)
+			}
+			if r.hasBell && m.appConfig.BellNotificationsEnabled() {
+				go func(title string) {
+					if err := notify.Send("Claude Squad", fmt.Sprintf("%s is ready", title)); err != nil {
+						log.InfoLog.Printf("notify send failed: %v", err)
+					}
+				}(r.instance.Title)
 			}
 			if r.diffStats != nil && r.diffStats.Error != nil {
 				if !strings.Contains(r.diffStats.Error.Error(), "base commit SHA not set") {
@@ -886,6 +894,7 @@ type instanceMetaResult struct {
 	instance  *session.Instance
 	updated   bool
 	hasPrompt bool
+	hasBell   bool
 	diffStats *git.DiffStats
 }
 
@@ -944,6 +953,7 @@ func tickUpdateMetadataCmd(active []*session.Instance) tea.Cmd {
 				r := &results[i]
 				r.instance = instance
 				r.updated, r.hasPrompt = instance.HasUpdated()
+				r.hasBell = instance.HasNewBell()
 				r.diffStats = instance.ComputeDiff()
 			}(idx, inst)
 		}

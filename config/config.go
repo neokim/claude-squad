@@ -44,6 +44,20 @@ type Config struct {
 	BranchPrefix string `json:"branch_prefix"`
 	// Profiles is a list of named program profiles.
 	Profiles []Profile `json:"profiles,omitempty"`
+	// BellNotifications, when true, fires an OS-level desktop notification
+	// when an instance's program emits a terminal BEL (e.g. Claude Code on
+	// task completion). Pointer to distinguish unset (legacy configs) from
+	// explicit false; nil is treated as the default (true).
+	BellNotifications *bool `json:"bell_notifications,omitempty"`
+}
+
+// BellNotificationsEnabled returns whether bell-triggered desktop
+// notifications are enabled, defaulting to true for legacy configs.
+func (c *Config) BellNotificationsEnabled() bool {
+	if c.BellNotifications == nil {
+		return true
+	}
+	return *c.BellNotifications
 }
 
 // GetProgram returns the program to run. If Profiles is non-empty and

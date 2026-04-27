@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -141,6 +142,10 @@ func (t *TmuxSession) Start(workDir string) error {
 		log.InfoLog.Printf("Warning: failed to enable mouse scrolling for session %s: %v", t.sanitizedName, err)
 	}
 
+	// Wire up bell-event monitoring so we can detect when the inner program
+	// (e.g. Claude Code) signals task completion via terminal BEL.
+	t.setupBellMonitoring()
+
 	err = t.Restore()
 	if err != nil {
 		if cleanupErr := t.Close(); cleanupErr != nil {
@@ -186,13 +191,75 @@ func (t *TmuxSession) Restore() error {
 		return fmt.Errorf("error opening PTY: %w", err)
 	}
 	t.ptmx = ptmx
-	t.monitor = newStatusMonitor()
+	monitor := newStatusMonitor()
+	// Baseline against any existing bell events so we don't fire notifications
+	// for bells that occurred before claude-squad attached.
+	if info, err := os.Stat(t.bellFilePath()); err == nil {
+		monitor.lastBellSize = info.Size()
+	}
+	t.monitor = monitor
 	return nil
+}
+
+// bellFilePath returns the path to the per-session file that tmux's
+// alert-bell hook appends to on each BEL event.
+func (t *TmuxSession) bellFilePath() string {
+	return filepath.Join(os.TempDir(), fmt.Sprintf("claudesquad_bell_%s", t.sanitizedName))
+}
+
+// setupBellMonitoring configures tmux to monitor BEL events on this session
+// and append a marker to a per-session file via the alert-bell hook.
+// Failures are logged but non-fatal — bell notifications are a nice-to-have.
+func (t *TmuxSession) setupBellMonitoring() {
+	bellPath := t.bellFilePath()
+	// Clear any stale file from a previous run with the same session name.
+	_ = os.Remove(bellPath)
+
+	monitorBellCmd := exec.Command("tmux", "set-window-option", "-t", t.sanitizedName, "monitor-bell", "on")
+	if err := t.cmdExec.Run(monitorBellCmd); err != nil {
+		log.InfoLog.Printf("Warning: failed to enable monitor-bell for session %s: %v", t.sanitizedName, err)
+		return
+	}
+	// Suppress tmux's own bell action so the user's outer terminal doesn't
+	// also beep — claude-squad fires the OS notification itself.
+	bellActionCmd := exec.Command("tmux", "set-option", "-t", t.sanitizedName, "bell-action", "none")
+	if err := t.cmdExec.Run(bellActionCmd); err != nil {
+		log.InfoLog.Printf("Warning: failed to set bell-action for session %s: %v", t.sanitizedName, err)
+	}
+	// sanitizedName is alphanumeric+underscore only and TMPDIR is trusted, so
+	// the path is safe to interpolate without further escaping.
+	hookArg := fmt.Sprintf(`run-shell "echo 1 >> '%s'"`, bellPath)
+	hookCmd := exec.Command("tmux", "set-hook", "-t", t.sanitizedName, "alert-bell", hookArg)
+	if err := t.cmdExec.Run(hookCmd); err != nil {
+		log.InfoLog.Printf("Warning: failed to set alert-bell hook for session %s: %v", t.sanitizedName, err)
+	}
+}
+
+// HasNewBell reports whether one or more BEL events have been recorded on
+// this session since the last call. Safe to call repeatedly from the
+// metadata poll loop.
+func (t *TmuxSession) HasNewBell() bool {
+	if t.monitor == nil {
+		return false
+	}
+	info, err := os.Stat(t.bellFilePath())
+	if err != nil {
+		return false
+	}
+	size := info.Size()
+	if size > t.monitor.lastBellSize {
+		t.monitor.lastBellSize = size
+		return true
+	}
+	return false
 }
 
 type statusMonitor struct {
 	// Store hashes to save memory.
 	prevOutputHash []byte
+	// Last observed size of the bell-event file. Used by HasNewBell to detect
+	// new BEL events appended by the tmux alert-bell hook.
+	lastBellSize int64
 }
 
 func newStatusMonitor() *statusMonitor {
@@ -424,6 +491,9 @@ func (t *TmuxSession) Close() error {
 	if err := t.cmdExec.Run(cmd); err != nil {
 		errs = append(errs, fmt.Errorf("error killing tmux session: %w", err))
 	}
+
+	// Best-effort cleanup of the bell-event file.
+	_ = os.Remove(t.bellFilePath())
 
 	if len(errs) == 0 {
 		return nil

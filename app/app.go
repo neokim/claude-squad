@@ -835,6 +835,15 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		m.state = stateRename
 		m.textInputOverlay = overlay.NewTextInputOverlay("Rename instance", selected.Title)
 		return m, tea.WindowSize()
+	case keys.KeyAttachExternal:
+		selected := m.list.GetSelectedInstance()
+		if selected == nil {
+			return m, nil
+		}
+		if err := selected.AttachExternal(); err != nil {
+			return m, m.handleError(err)
+		}
+		return m, nil
 	case keys.KeyEnter:
 		if m.list.NumInstances() == 0 {
 			return m, nil

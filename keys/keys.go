@@ -22,8 +22,9 @@ const (
 
 	KeyCheckout
 	KeyResume
-	KeyPrompt // New key for entering a prompt
-	KeyHelp   // Key for showing help screen
+	KeyPrompt         // New key for entering a prompt
+	KeyHelp           // Key for showing help screen
+	KeyAttachExternal // Open a new OS terminal window attached to the tmux session
 
 	// Diff keybindings
 	KeyShiftUp
@@ -49,6 +50,7 @@ var GlobalKeyStringsMap = map[string]KeyName{
 	"r":          KeyResume,
 	"p":          KeySubmit,
 	"?":          KeyHelp,
+	"a":          KeyAttachExternal,
 }
 
 // GlobalkeyBindings is a global, immutable map of KeyName tot keybinding.
@@ -108,6 +110,10 @@ var GlobalkeyBindings = map[KeyName]key.Binding{
 	KeyResume: key.NewBinding(
 		key.WithKeys("r"),
 		key.WithHelp("r", "resume"),
+	),
+	KeyAttachExternal: key.NewBinding(
+		key.WithKeys("a"),
+		key.WithHelp("a", "attach in new window"),
 	),
 
 	// -- Special keybindings --

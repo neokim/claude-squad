@@ -5,9 +5,11 @@ import (
 	"claude-squad/session/git"
 	"claude-squad/session/tmux"
 	"path/filepath"
+	"runtime"
 
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -359,6 +361,78 @@ func (i *Instance) Attach() (chan struct{}, error) {
 		return nil, fmt.Errorf("cannot attach instance that has not been started")
 	}
 	return i.tmuxSession.Attach()
+}
+
+// AttachExternal opens a new OS terminal window and attaches to this instance's
+// tmux session as an additional client. The original claude-squad TUI keeps its
+// own connection — this gives the user a separate window viewing the same
+// session.
+func (i *Instance) AttachExternal() error {
+	if !i.started {
+		return fmt.Errorf("cannot attach: instance has not been started yet")
+	}
+	if i.Status == Loading {
+		return fmt.Errorf("cannot attach: instance is still loading")
+	}
+	if i.Status == Paused {
+		return fmt.Errorf("cannot attach: instance is paused (resume it first with 'r')")
+	}
+	if !i.tmuxSession.DoesSessionExist() {
+		return fmt.Errorf("cannot attach: tmux session is not alive")
+	}
+
+	sessionName := i.tmuxSession.GetSessionName()
+	tmuxBin, err := exec.LookPath("tmux")
+	if err != nil {
+		return fmt.Errorf("tmux binary not found: %w", err)
+	}
+	attachCmd := fmt.Sprintf("%s attach -t %s", shellQuote(tmuxBin), shellQuote(sessionName))
+
+	if runtime.GOOS != "darwin" {
+		return fmt.Errorf("opening external terminal is only supported on macOS")
+	}
+
+	termProgram := os.Getenv("TERM_PROGRAM")
+	var script string
+	switch termProgram {
+	case "iTerm.app":
+		script = fmt.Sprintf(
+			`tell application "iTerm"
+				activate
+				create window with default profile command %s
+			end tell`,
+			appleScriptQuote(attachCmd),
+		)
+	default:
+		// Apple_Terminal or unknown — default to Terminal.app, which is always
+		// present on macOS.
+		script = fmt.Sprintf(
+			`tell application "Terminal"
+				activate
+				do script %s
+			end tell`,
+			appleScriptQuote(attachCmd),
+		)
+	}
+
+	cmd := exec.Command("osascript", "-e", script)
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to open external terminal: %w", err)
+	}
+	return nil
+}
+
+// shellQuote wraps s in single quotes for safe use in a /bin/sh command line.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// appleScriptQuote wraps s in double quotes for safe use as an AppleScript
+// string literal.
+func appleScriptQuote(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `"`, `\"`)
+	return `"` + s + `"`
 }
 
 func (i *Instance) SetPreviewSize(width, height int) error {

@@ -49,6 +49,14 @@ type Menu struct {
 	instance      *session.Instance
 	activeTab     int
 
+	// actionStart and actionEnd delimit the action-group slice within options
+	// (half-open: [start, end)). They drive both the action-group highlighting
+	// and the vertical separator between groups.
+	actionStart, actionEnd int
+	// systemEnd marks the end of the system group (i.e. len(options) when an
+	// instance is shown).
+	systemEnd int
+
 	// keyDown is the key which is pressed. The default is -1.
 	keyDown keys.KeyName
 }
@@ -124,14 +132,21 @@ func (m *Menu) addInstanceOptions() {
 	// Loading instances only get minimal options
 	if m.instance != nil && m.instance.Status == session.Loading {
 		m.options = []keys.KeyName{keys.KeyNew, keys.KeyHelp, keys.KeyQuit}
+		m.actionStart, m.actionEnd, m.systemEnd = 0, 0, len(m.options)
 		return
 	}
 
 	// Instance management group
-	options := []keys.KeyName{keys.KeyNew, keys.KeyKill}
+	mgmtGroup := []keys.KeyName{keys.KeyNew, keys.KeyKill}
 
 	// Action group
-	actionGroup := []keys.KeyName{keys.KeyEnter, keys.KeySubmit}
+	actionGroup := []keys.KeyName{keys.KeyEnter}
+	if m.instance.Status != session.Paused {
+		// Attaching from a new OS terminal only makes sense while the tmux
+		// session is alive — i.e. not paused.
+		actionGroup = append(actionGroup, keys.KeyAttachExternal)
+	}
+	actionGroup = append(actionGroup, keys.KeySubmit)
 	if m.instance.Status == session.Paused {
 		actionGroup = append(actionGroup, keys.KeyResume)
 	} else {
@@ -146,9 +161,14 @@ func (m *Menu) addInstanceOptions() {
 	// System group
 	systemGroup := []keys.KeyName{keys.KeyTab, keys.KeyHelp, keys.KeyQuit}
 
-	// Combine all groups
+	// Combine all groups and record group boundaries so String() can render
+	// action-group highlighting and inter-group separators correctly.
+	options := append([]keys.KeyName{}, mgmtGroup...)
+	m.actionStart = len(options)
 	options = append(options, actionGroup...)
+	m.actionEnd = len(options)
 	options = append(options, systemGroup...)
+	m.systemEnd = len(options)
 
 	m.options = options
 }
@@ -162,15 +182,10 @@ func (m *Menu) SetSize(width, height int) {
 func (m *Menu) String() string {
 	var s strings.Builder
 
-	// Define group boundaries
-	groups := []struct {
-		start int
-		end   int
-	}{
-		{0, 2}, // Instance management group (n, d)
-		{2, 5}, // Action group (enter, submit, pause/resume)
-		{6, 8}, // System group (tab, help, q)
-	}
+	// Group boundaries are populated by addInstanceOptions so the action
+	// highlighting and inter-group separators stay correct as the action
+	// group's size changes (paused vs running, with/without ShiftUp).
+	mgmtEnd, actionStart, actionEnd, systemEnd := m.actionStart, m.actionStart, m.actionEnd, m.systemEnd
 
 	for i, k := range m.options {
 		binding := keys.GlobalkeyBindings[k]
@@ -192,8 +207,7 @@ func (m *Menu) String() string {
 			// For empty state, the action group is the first group
 			inActionGroup = i <= 1
 		default:
-			// For other states, the action group is the second group
-			inActionGroup = i >= groups[1].start && i < groups[1].end
+			inActionGroup = i >= actionStart && i < actionEnd
 		}
 
 		if inActionGroup {
@@ -208,15 +222,14 @@ func (m *Menu) String() string {
 
 		// Add appropriate separator
 		if i != len(m.options)-1 {
-			isGroupEnd := false
-			for _, group := range groups {
-				if i == group.end-1 {
-					s.WriteString(sepStyle.Render(verticalSeparator))
-					isGroupEnd = true
-					break
-				}
-			}
-			if !isGroupEnd {
+			// Use vertical separator at the end of mgmt and action groups (in
+			// instance-default state); fall back to the regular separator
+			// otherwise. systemEnd == 0 indicates no instance-default boundaries
+			// were set (e.g. empty / new-instance / prompt states).
+			isGroupEnd := systemEnd > 0 && (i == mgmtEnd-1 || i == actionEnd-1)
+			if isGroupEnd {
+				s.WriteString(sepStyle.Render(verticalSeparator))
+			} else {
 				s.WriteString(sepStyle.Render(separator))
 			}
 		}

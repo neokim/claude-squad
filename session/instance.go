@@ -1,6 +1,7 @@
 package session
 
 import (
+	"bytes"
 	"claude-squad/log"
 	"claude-squad/session/git"
 	"claude-squad/session/tmux"
@@ -396,6 +397,171 @@ func (i *Instance) SetTitle(title string) error {
 		return fmt.Errorf("cannot change title of a started instance")
 	}
 	i.Title = title
+	return nil
+}
+
+// claudeProjectDir returns the conversation history directory that the claude CLI
+// uses for a given working directory. The encoding rule observed in ~/.claude/projects
+// replaces every '/', '.', and '_' with '-'.
+func claudeProjectDir(workingPath string) (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve home directory: %w", err)
+	}
+	encoded := workingPath
+	encoded = strings.ReplaceAll(encoded, "/", "-")
+	encoded = strings.ReplaceAll(encoded, ".", "-")
+	encoded = strings.ReplaceAll(encoded, "_", "-")
+	return filepath.Join(home, ".claude", "projects", encoded), nil
+}
+
+// rewriteCwdInClaudeDir rewrites every .jsonl file in dir, replacing all occurrences
+// of oldPath with newPath. claude embeds the working directory both in per-message
+// "cwd" metadata and in tool outputs, so a plain string substitution is what we
+// need: after this runs, `claude --resume` no longer reports "different directory".
+// Each file is updated atomically (write to .tmp + rename); files that don't
+// reference oldPath are skipped.
+func rewriteCwdInClaudeDir(dir, oldPath, newPath string) error {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return fmt.Errorf("failed to read claude project dir: %w", err)
+	}
+	old := []byte(oldPath)
+	new := []byte(newPath)
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
+			continue
+		}
+		full := filepath.Join(dir, e.Name())
+		b, err := os.ReadFile(full)
+		if err != nil {
+			return fmt.Errorf("failed to read %s: %w", full, err)
+		}
+		if !bytes.Contains(b, old) {
+			continue
+		}
+		rewritten := bytes.ReplaceAll(b, old, new)
+		tmp := full + ".rename.tmp"
+		if err := os.WriteFile(tmp, rewritten, 0600); err != nil {
+			return fmt.Errorf("failed to write %s: %w", tmp, err)
+		}
+		if err := os.Rename(tmp, full); err != nil {
+			_ = os.Remove(tmp)
+			return fmt.Errorf("failed to commit %s: %w", full, err)
+		}
+	}
+	return nil
+}
+
+// Rename changes the title of a paused instance, also renaming the underlying git
+// branch and (if present) the claude conversation history directory so that
+// derived names stay consistent. The old tmux session is killed at the end —
+// the next Resume starts a fresh session rooted at the new worktree path,
+// avoiding the case where the inner shell/claude process keeps the deleted
+// old worktree as its cwd. claude conversation history survives because the
+// jsonl rewrite step updates per-entry cwd metadata.
+//
+// Only allowed when the instance is paused (worktree directory is absent,
+// tmux is detached). All identifiers are computed up front so collisions can
+// be rejected before any side effects are applied; failures during the apply
+// phase trigger best-effort rollback of earlier steps.
+func (i *Instance) Rename(newTitle string) error {
+	newTitle = strings.TrimSpace(newTitle)
+	if newTitle == "" {
+		return fmt.Errorf("title cannot be empty")
+	}
+	if !i.started {
+		return fmt.Errorf("cannot rename instance that has not been started")
+	}
+	if i.Status != Paused {
+		return fmt.Errorf("instance must be paused to rename")
+	}
+	if newTitle == i.Title {
+		return nil
+	}
+
+	// 1. Plan: compute all new identifiers up front so we can validate collisions
+	//    without touching anything yet.
+	newBranchName, newWorktreePath, err := git.PlanRename(newTitle)
+	if err != nil {
+		return err
+	}
+
+	oldWorktreePath := i.gitWorktree.GetWorktreePath()
+	oldBranchName := i.gitWorktree.GetBranchName()
+
+	oldClaudeDir, err := claudeProjectDir(oldWorktreePath)
+	if err != nil {
+		return err
+	}
+	newClaudeDir, err := claudeProjectDir(newWorktreePath)
+	if err != nil {
+		return err
+	}
+
+	// 2. Pre-checks. Fail fast before any side effect.
+	if newBranchName != oldBranchName && i.gitWorktree.BranchExists(newBranchName) {
+		return fmt.Errorf("branch %s already exists", newBranchName)
+	}
+	if probe := tmux.NewTmuxSession(newTitle, i.Program); probe.DoesSessionExist() {
+		return fmt.Errorf("tmux session for %q already exists", newTitle)
+	}
+
+	claudeDirExists := false
+	if _, statErr := os.Stat(oldClaudeDir); statErr == nil {
+		claudeDirExists = true
+		if _, dstErr := os.Stat(newClaudeDir); dstErr == nil {
+			return fmt.Errorf("claude project directory already exists at %s", newClaudeDir)
+		} else if !os.IsNotExist(dstErr) {
+			return fmt.Errorf("failed to check claude project directory destination: %w", dstErr)
+		}
+	} else if !os.IsNotExist(statErr) {
+		return fmt.Errorf("failed to check claude project directory: %w", statErr)
+	}
+
+	// 3. Apply. Tmux is closed last so earlier-step rollback doesn't have to
+	//    recreate a session: branch rename → claude dir mv → jsonl rewrite →
+	//    tmux close + replace.
+	if err := i.gitWorktree.RenameBranch(newTitle, newBranchName, newWorktreePath); err != nil {
+		return fmt.Errorf("failed to rename git branch: %w", err)
+	}
+
+	if claudeDirExists {
+		if err := os.Rename(oldClaudeDir, newClaudeDir); err != nil {
+			if rbErr := i.gitWorktree.RollbackBranchRename(oldBranchName, oldWorktreePath); rbErr != nil {
+				log.ErrorLog.Printf("failed to roll back branch rename: %v", rbErr)
+			}
+			return fmt.Errorf("failed to rename claude project directory: %w", err)
+		}
+		// Rewrite cwd metadata inside the moved jsonl files so `claude --resume`
+		// recognises the new worktree path. Without this step claude reports
+		// "this conversation is from a different directory" because it trusts
+		// the per-entry cwd field, not the directory name.
+		if err := rewriteCwdInClaudeDir(newClaudeDir, oldWorktreePath, newWorktreePath); err != nil {
+			if rbErr := os.Rename(newClaudeDir, oldClaudeDir); rbErr != nil {
+				log.ErrorLog.Printf("failed to roll back claude project dir move: %v", rbErr)
+			}
+			if rbErr := i.gitWorktree.RollbackBranchRename(oldBranchName, oldWorktreePath); rbErr != nil {
+				log.ErrorLog.Printf("failed to roll back branch rename: %v", rbErr)
+			}
+			return fmt.Errorf("failed to rewrite claude history cwd: %w", err)
+		}
+	}
+
+	// Kill the old tmux session and replace the in-memory handle. The old shell/
+	// claude process was holding the now-deleted old worktree as its cwd, so
+	// keeping the session would only carry that broken state forward. A failure
+	// here is non-fatal — the orphan session would be harmless and the next
+	// Resume creates a fresh one regardless.
+	if err := i.tmuxSession.Close(); err != nil {
+		log.ErrorLog.Printf("failed to close old tmux session: %v", err)
+	}
+	i.tmuxSession = tmux.NewTmuxSession(newTitle, i.Program)
+
+	// 4. Memory.
+	i.Title = newTitle
+	i.Branch = i.gitWorktree.GetBranchName()
+	i.UpdatedAt = time.Now()
 	return nil
 }
 

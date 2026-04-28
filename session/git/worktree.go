@@ -136,3 +136,71 @@ func (g *GitWorktree) GetRepoName() string {
 func (g *GitWorktree) GetBaseCommitSHA() string {
 	return g.baseCommitSHA
 }
+
+// PlanRename computes the new branch name and worktree path that would result from
+// renaming a session to newSessionName. Computing these up front lets callers validate
+// collisions across all related artifacts (branch / worktree dir / external history)
+// before any side effects are applied.
+func PlanRename(newSessionName string) (newBranchName, newWorktreePath string, err error) {
+	cfg := config.LoadConfig()
+	newBranchName = sanitizeBranchName(fmt.Sprintf("%s%s", cfg.BranchPrefix, newSessionName))
+	if newBranchName == "" {
+		return "", "", fmt.Errorf("new branch name is empty after sanitization")
+	}
+
+	worktreeDir, err := getWorktreeDirectory()
+	if err != nil {
+		return "", "", fmt.Errorf("failed to resolve worktree directory: %w", err)
+	}
+	newWorktreePath = filepath.Join(worktreeDir, newBranchName) + "_" + fmt.Sprintf("%x", time.Now().UnixNano())
+	return newBranchName, newWorktreePath, nil
+}
+
+// BranchExists returns true if a local branch with the given name already exists.
+func (g *GitWorktree) BranchExists(branchName string) bool {
+	_, err := g.runGitCommand(g.repoPath, "show-ref", "--verify", fmt.Sprintf("refs/heads/%s", branchName))
+	return err == nil
+}
+
+// RenameBranch renames the underlying git branch and reassigns sessionName/worktreePath
+// to the externally-provided values. The caller is expected to have validated that
+// newBranchName does not already exist; we re-check defensively. The worktree
+// directory must not be currently checked out (i.e., the instance is paused).
+func (g *GitWorktree) RenameBranch(newSessionName, newBranchName, newWorktreePath string) error {
+	if newBranchName == g.branchName {
+		// Title differs but produces the same sanitized branch name; nothing to do at the git layer.
+		g.sessionName = newSessionName
+		g.worktreePath = newWorktreePath
+		return nil
+	}
+	if newBranchName == "" {
+		return fmt.Errorf("new branch name is empty")
+	}
+	if g.BranchExists(newBranchName) {
+		return fmt.Errorf("branch %s already exists", newBranchName)
+	}
+	if _, err := g.runGitCommand(g.repoPath, "branch", "-m", g.branchName, newBranchName); err != nil {
+		return fmt.Errorf("failed to rename branch %s -> %s: %w", g.branchName, newBranchName, err)
+	}
+
+	g.branchName = newBranchName
+	g.sessionName = newSessionName
+	g.worktreePath = newWorktreePath
+	return nil
+}
+
+// RollbackBranchRename reverts a previous branch rename in the git repo and restores
+// the in-memory worktreePath. Returns an error if the git rename fails; callers should
+// log it as a degraded-state warning since a failed rollback leaves git/in-memory state
+// out of sync.
+func (g *GitWorktree) RollbackBranchRename(prevBranchName, prevWorktreePath string) error {
+	if g.branchName == prevBranchName {
+		return nil
+	}
+	if _, err := g.runGitCommand(g.repoPath, "branch", "-m", g.branchName, prevBranchName); err != nil {
+		return fmt.Errorf("failed to roll back branch rename: %w", err)
+	}
+	g.branchName = prevBranchName
+	g.worktreePath = prevWorktreePath
+	return nil
+}

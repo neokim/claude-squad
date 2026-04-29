@@ -135,7 +135,7 @@ func (m *Menu) addInstanceOptions() {
 	if m.instance.Status == session.Paused {
 		actionGroup = append(actionGroup, keys.KeyResume)
 	} else {
-		actionGroup = append(actionGroup, keys.KeyCheckout)
+		actionGroup = append(actionGroup, keys.KeyCheckout, keys.KeyRestartInstance)
 	}
 
 	// Navigation group (when in diff tab)
@@ -162,14 +162,21 @@ func (m *Menu) SetSize(width, height int) {
 func (m *Menu) String() string {
 	var s strings.Builder
 
-	// Define group boundaries
+	// System group is always the trailing tab/help/quit triple, so the action
+	// group end can be derived from the options length. This lets the action
+	// group grow (e.g. with KeyShiftUp or KeyRestartInstance) without re-tuning
+	// hard-coded indices.
+	actionEnd := len(m.options) - 3
+	if actionEnd < 2 {
+		actionEnd = 2
+	}
 	groups := []struct {
 		start int
 		end   int
 	}{
-		{0, 2}, // Instance management group (n, d)
-		{2, 5}, // Action group (enter, submit, pause/resume)
-		{6, 8}, // System group (tab, help, q)
+		{0, 2},                      // Instance management group (n, D)
+		{2, actionEnd},              // Action group (enter, submit, …)
+		{actionEnd, len(m.options)}, // System group (tab, help, q)
 	}
 
 	for i, k := range m.options {

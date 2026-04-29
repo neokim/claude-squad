@@ -756,6 +756,33 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 			return m, m.handleError(err)
 		}
 		return m, tea.WindowSize()
+	case keys.KeyRestartInstance:
+		selected := m.list.GetSelectedInstance()
+		if selected == nil || selected.Status == session.Loading || selected.Status == session.Paused {
+			return m, nil
+		}
+
+		restartAction := func() tea.Msg {
+			// Drop any cached terminal-pane connection — the tmux session it
+			// pointed at is about to be killed.
+			m.tabbedWindow.CleanupTerminalForInstance(selected.Title)
+			if err := selected.RestartInstance(); err != nil {
+				return err
+			}
+			// Auto-attach to the freshly-started session so the user lands
+			// directly in the new tmux without a second keystroke.
+			ch, err := m.list.Attach()
+			if err != nil {
+				return err
+			}
+			<-ch
+			m.state = stateDefault
+			m.instanceChanged()
+			return nil
+		}
+
+		message := fmt.Sprintf("[!] Restart '%s'? Changes will be committed; tmux + claude restart fresh.", selected.Title)
+		return m, m.confirmAction(message, restartAction)
 	case keys.KeyEnter:
 		if m.list.NumInstances() == 0 {
 			return m, nil

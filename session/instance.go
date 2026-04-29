@@ -791,6 +791,39 @@ func (i *Instance) Resume() error {
 	return nil
 }
 
+// RestartInstance fully restarts the selected instance: dirty changes are
+// committed, the worktree is removed, the tmux session (and its child claude
+// process) is killed, then everything is recreated from scratch. The git
+// branch is preserved.
+//
+// This is implemented as Pause → tmux.Close → Resume because Pause normally
+// only *detaches* the tmux session (keeping the inner claude process alive);
+// the explicit Close in between is what forces a fresh program launch on
+// Resume.
+func (i *Instance) RestartInstance() error {
+	if !i.started {
+		return fmt.Errorf("cannot restart: instance has not been started yet")
+	}
+	if i.Status == Paused {
+		return fmt.Errorf("cannot restart: instance is paused (resume it first with 'r')")
+	}
+
+	if err := i.Pause(); err != nil {
+		return fmt.Errorf("failed to pause during restart: %w", err)
+	}
+
+	// Pause leaves tmux detached but alive. Close it now so Resume spawns a
+	// fresh tmux + claude rather than reattaching to the old one.
+	if err := i.tmuxSession.Close(); err != nil {
+		log.ErrorLog.Printf("failed to close tmux session during restart: %v", err)
+	}
+
+	if err := i.Resume(); err != nil {
+		return fmt.Errorf("failed to resume during restart: %w", err)
+	}
+	return nil
+}
+
 // UpdateDiffStats updates the git diff statistics for this instance
 func (i *Instance) UpdateDiffStats() error {
 	if !i.started {

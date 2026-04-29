@@ -22,10 +22,11 @@ const (
 
 	KeyCheckout
 	KeyResume
-	KeyRename         // Rename a paused instance
-	KeyPrompt         // New key for entering a prompt
-	KeyHelp           // Key for showing help screen
-	KeyAttachExternal // Open a new OS terminal window attached to the tmux session
+	KeyRename          // Rename a paused instance
+	KeyPrompt          // New key for entering a prompt
+	KeyHelp            // Key for showing help screen
+	KeyAttachExternal  // Open a new OS terminal window attached to the tmux session
+	KeyRestartInstance // Restart the selected instance (commit, kill tmux+claude, restart fresh)
 
 	// Diff keybindings
 	KeyShiftUp
@@ -59,6 +60,7 @@ var GlobalKeyStringsMap = map[string]KeyName{
 	"p":          KeySubmit,
 	"?":          KeyHelp,
 	"a":          KeyAttachExternal,
+	"S":          KeyRestartInstance,
 }
 
 // GlobalkeyBindings is a global, immutable map of KeyName tot keybinding.
@@ -135,6 +137,10 @@ var GlobalkeyBindings = map[KeyName]key.Binding{
 	KeyAttachExternal: key.NewBinding(
 		key.WithKeys("a"),
 		key.WithHelp("a", "attach in new window"),
+	),
+	KeyRestartInstance: key.NewBinding(
+		key.WithKeys("S"),
+		key.WithHelp("S", "restart"),
 	),
 
 	// -- Special keybindings --

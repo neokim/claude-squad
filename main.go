@@ -121,7 +121,7 @@ var (
 
 			cfg := config.LoadConfig()
 
-			configDir, err := config.GetConfigDir()
+			configDir, err := config.GetRepoConfigDir()
 			if err != nil {
 				return fmt.Errorf("failed to get config directory: %w", err)
 			}

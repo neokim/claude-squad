@@ -3,6 +3,7 @@ package config
 import (
 	"claude-squad/log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -20,6 +21,24 @@ func TestMain(m *testing.M) {
 
 	exitCode := m.Run()
 	os.Exit(exitCode)
+}
+
+// setupTempRepo creates an empty git repo in a temp dir and chdir's into it.
+// Returns the canonical path to the repo. Cwd is restored at test end.
+func setupTempRepo(t *testing.T) string {
+	t.Helper()
+	tempDir := t.TempDir()
+	resolved, err := filepath.EvalSymlinks(tempDir)
+	require.NoError(t, err)
+
+	require.NoError(t, exec.Command("git", "init", resolved).Run())
+
+	origWD, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(resolved))
+	t.Cleanup(func() { _ = os.Chdir(origWD) })
+
+	return resolved
 }
 
 func TestGetClaudeCommand(t *testing.T) {
@@ -112,26 +131,33 @@ func TestDefaultConfig(t *testing.T) {
 
 }
 
-func TestGetConfigDir(t *testing.T) {
-	t.Run("returns valid config directory", func(t *testing.T) {
-		configDir, err := GetConfigDir()
+func TestGetRepoConfigDir(t *testing.T) {
+	t.Run("returns <repo>/.claude-squad inside a git repo", func(t *testing.T) {
+		repo := setupTempRepo(t)
+
+		configDir, err := GetRepoConfigDir()
 
 		assert.NoError(t, err)
-		assert.NotEmpty(t, configDir)
-		assert.True(t, strings.HasSuffix(configDir, ".claude-squad"))
-
-		// Verify it's an absolute path
+		assert.Equal(t, filepath.Join(repo, ".claude-squad"), configDir)
 		assert.True(t, filepath.IsAbs(configDir))
+	})
+
+	t.Run("errors when not in a git repo", func(t *testing.T) {
+		tempDir, err := filepath.EvalSymlinks(t.TempDir())
+		require.NoError(t, err)
+		origWD, err := os.Getwd()
+		require.NoError(t, err)
+		require.NoError(t, os.Chdir(tempDir))
+		t.Cleanup(func() { _ = os.Chdir(origWD) })
+
+		_, err = GetRepoConfigDir()
+		assert.Error(t, err)
 	})
 }
 
 func TestLoadConfig(t *testing.T) {
 	t.Run("returns default config when file doesn't exist", func(t *testing.T) {
-		// Use a temporary home directory to avoid interfering with real config
-		originalHome := os.Getenv("HOME")
-		tempHome := t.TempDir()
-		os.Setenv("HOME", tempHome)
-		defer os.Setenv("HOME", originalHome)
+		setupTempRepo(t)
 
 		config := LoadConfig()
 
@@ -143,13 +169,10 @@ func TestLoadConfig(t *testing.T) {
 	})
 
 	t.Run("loads valid config file", func(t *testing.T) {
-		// Create a temporary config directory
-		tempHome := t.TempDir()
-		configDir := filepath.Join(tempHome, ".claude-squad")
-		err := os.MkdirAll(configDir, 0755)
-		require.NoError(t, err)
+		repo := setupTempRepo(t)
+		configDir := filepath.Join(repo, ".claude-squad")
+		require.NoError(t, os.MkdirAll(configDir, 0755))
 
-		// Create a test config file
 		configPath := filepath.Join(configDir, ConfigFileName)
 		configContent := `{
 			"default_program": "test-claude",
@@ -157,13 +180,7 @@ func TestLoadConfig(t *testing.T) {
 			"daemon_poll_interval": 2000,
 			"branch_prefix": "test/"
 		}`
-		err = os.WriteFile(configPath, []byte(configContent), 0644)
-		require.NoError(t, err)
-
-		// Override HOME environment
-		originalHome := os.Getenv("HOME")
-		os.Setenv("HOME", tempHome)
-		defer os.Setenv("HOME", originalHome)
+		require.NoError(t, os.WriteFile(configPath, []byte(configContent), 0644))
 
 		config := LoadConfig()
 
@@ -175,30 +192,19 @@ func TestLoadConfig(t *testing.T) {
 	})
 
 	t.Run("returns default config on invalid JSON", func(t *testing.T) {
-		// Create a temporary config directory
-		tempHome := t.TempDir()
-		configDir := filepath.Join(tempHome, ".claude-squad")
-		err := os.MkdirAll(configDir, 0755)
-		require.NoError(t, err)
+		repo := setupTempRepo(t)
+		configDir := filepath.Join(repo, ".claude-squad")
+		require.NoError(t, os.MkdirAll(configDir, 0755))
 
-		// Create an invalid config file
 		configPath := filepath.Join(configDir, ConfigFileName)
-		invalidContent := `{"invalid": json content}`
-		err = os.WriteFile(configPath, []byte(invalidContent), 0644)
-		require.NoError(t, err)
-
-		// Override HOME environment
-		originalHome := os.Getenv("HOME")
-		os.Setenv("HOME", tempHome)
-		defer os.Setenv("HOME", originalHome)
+		require.NoError(t, os.WriteFile(configPath, []byte(`{"invalid": json content}`), 0644))
 
 		config := LoadConfig()
 
-		// Should return default config when JSON is invalid
 		assert.NotNil(t, config)
 		assert.NotEmpty(t, config.DefaultProgram)
-		assert.False(t, config.AutoYes)                  // Default value
-		assert.Equal(t, 1000, config.DaemonPollInterval) // Default value
+		assert.False(t, config.AutoYes)
+		assert.Equal(t, 1000, config.DaemonPollInterval)
 	})
 }
 
@@ -269,16 +275,9 @@ func TestGetProfiles(t *testing.T) {
 }
 
 func TestSaveConfig(t *testing.T) {
-	t.Run("saves config to file", func(t *testing.T) {
-		// Create a temporary config directory
-		tempHome := t.TempDir()
+	t.Run("saves config to file under <repo>/.claude-squad", func(t *testing.T) {
+		repo := setupTempRepo(t)
 
-		// Override HOME environment
-		originalHome := os.Getenv("HOME")
-		os.Setenv("HOME", tempHome)
-		defer os.Setenv("HOME", originalHome)
-
-		// Create a test config
 		testConfig := &Config{
 			DefaultProgram:     "test-program",
 			AutoYes:            true,
@@ -289,17 +288,24 @@ func TestSaveConfig(t *testing.T) {
 		err := SaveConfig(testConfig)
 		assert.NoError(t, err)
 
-		// Verify the file was created
-		configDir := filepath.Join(tempHome, ".claude-squad")
-		configPath := filepath.Join(configDir, ConfigFileName)
-
+		configPath := filepath.Join(repo, ".claude-squad", ConfigFileName)
 		assert.FileExists(t, configPath)
 
-		// Load and verify the content
 		loadedConfig := LoadConfig()
 		assert.Equal(t, testConfig.DefaultProgram, loadedConfig.DefaultProgram)
 		assert.Equal(t, testConfig.AutoYes, loadedConfig.AutoYes)
 		assert.Equal(t, testConfig.DaemonPollInterval, loadedConfig.DaemonPollInterval)
 		assert.Equal(t, testConfig.BranchPrefix, loadedConfig.BranchPrefix)
+	})
+
+	t.Run("first save adds .claude-squad/ to .gitignore", func(t *testing.T) {
+		repo := setupTempRepo(t)
+
+		err := SaveConfig(DefaultConfig())
+		require.NoError(t, err)
+
+		gitignore, err := os.ReadFile(filepath.Join(repo, ".gitignore"))
+		require.NoError(t, err)
+		assert.Contains(t, string(gitignore), ".claude-squad/")
 	})
 }

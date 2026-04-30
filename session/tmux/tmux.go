@@ -3,6 +3,7 @@ package tmux
 import (
 	"bytes"
 	"claude-squad/cmd"
+	"claude-squad/config"
 	"claude-squad/log"
 	"context"
 	"crypto/sha256"
@@ -57,14 +58,28 @@ type TmuxSession struct {
 	wg     *sync.WaitGroup
 }
 
-const TmuxPrefix = "claudesquad_"
+// TmuxBasePrefix is the shared prefix on every claude-squad tmux session.
+// The full prefix used at runtime is "<TmuxBasePrefix><repo-id>_" so sessions
+// from different repos never collide in tmux's flat session namespace.
+const TmuxBasePrefix = "claudesquad_"
 
 var whiteSpaceRegex = regexp.MustCompile(`\s+`)
+
+// tmuxPrefix returns "claudesquad_<repo-id>_" for the current repo, or
+// TmuxBasePrefix as a fallback when not inside a git repo (mainly for tests
+// running outside the source tree).
+func tmuxPrefix() string {
+	repoRoot, err := config.GetRepoRoot()
+	if err != nil {
+		return TmuxBasePrefix
+	}
+	return fmt.Sprintf("%s%s_", TmuxBasePrefix, config.GetRepoID(repoRoot))
+}
 
 func toClaudeSquadTmuxName(str string) string {
 	str = whiteSpaceRegex.ReplaceAllString(str, "")
 	str = strings.ReplaceAll(str, ".", "_") // tmux replaces all . with _
-	return fmt.Sprintf("%s%s", TmuxPrefix, str)
+	return tmuxPrefix() + str
 }
 
 // NewTmuxSession creates a new TmuxSession with the given name and program.
@@ -484,31 +499,32 @@ func (t *TmuxSession) CapturePaneContentWithOptions(start, end string) (string, 
 	return string(output), nil
 }
 
-// CleanupSessions kills all tmux sessions that start with "session-"
+// CleanupSessions kills tmux sessions belonging to the current repo. Sessions
+// from other repos (different prefix) are left untouched.
 func CleanupSessions(cmdExec cmd.Executor) error {
-	// First try to list sessions
-	cmd := exec.Command("tmux", "ls")
-	output, err := cmdExec.Output(cmd)
-
-	// If there's an error and it's because no server is running, that's fine
-	// Exit code 1 typically means no sessions exist
+	listCmd := exec.Command("tmux", "ls")
+	output, err := cmdExec.Output(listCmd)
 	if err != nil {
+		// Exit code 1 means no tmux server / no sessions — nothing to do.
 		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
-			return nil // No sessions to clean up
+			return nil
 		}
 		return fmt.Errorf("failed to list tmux sessions: %v", err)
 	}
 
-	re := regexp.MustCompile(fmt.Sprintf(`%s.*:`, TmuxPrefix))
-	matches := re.FindAllString(string(output), -1)
-	for i, match := range matches {
-		matches[i] = match[:strings.Index(match, ":")]
-	}
-
-	for _, match := range matches {
-		log.InfoLog.Printf("cleaning up session: %s", match)
-		if err := cmdExec.Run(exec.Command("tmux", "kill-session", "-t", match)); err != nil {
-			return fmt.Errorf("failed to kill tmux session %s: %v", match, err)
+	prefix := tmuxPrefix()
+	for _, line := range strings.Split(string(output), "\n") {
+		if !strings.HasPrefix(line, prefix) {
+			continue
+		}
+		idx := strings.Index(line, ":")
+		if idx <= 0 {
+			continue
+		}
+		name := line[:idx]
+		log.InfoLog.Printf("cleaning up session: %s", name)
+		if err := cmdExec.Run(exec.Command("tmux", "kill-session", "-t", name)); err != nil {
+			return fmt.Errorf("failed to kill tmux session %s: %v", name, err)
 		}
 	}
 	return nil

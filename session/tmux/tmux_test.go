@@ -42,11 +42,13 @@ func NewMockPtyFactory(t *testing.T) *MockPtyFactory {
 }
 
 func TestSanitizeName(t *testing.T) {
+	prefix := tmuxPrefix()
+
 	session := NewTmuxSession("asdf", "program")
-	require.Equal(t, TmuxPrefix+"asdf", session.sanitizedName)
+	require.Equal(t, prefix+"asdf", session.sanitizedName)
 
 	session = NewTmuxSession("a sd f . . asdf", "program")
-	require.Equal(t, TmuxPrefix+"asdf__asdf", session.sanitizedName)
+	require.Equal(t, prefix+"asdf__asdf", session.sanitizedName)
 }
 
 func TestStartTmuxSession(t *testing.T) {
@@ -68,13 +70,14 @@ func TestStartTmuxSession(t *testing.T) {
 
 	workdir := t.TempDir()
 	session := newTmuxSession("test-session", "claude", ptyFactory, cmdExec)
+	sessName := session.sanitizedName
 
 	err := session.Start(workdir)
 	require.NoError(t, err)
 	require.Equal(t, 2, len(ptyFactory.cmds))
-	require.Equal(t, fmt.Sprintf("tmux new-session -d -s claudesquad_test-session -c %s claude", workdir),
+	require.Equal(t, fmt.Sprintf("tmux new-session -d -s %s -c %s claude", sessName, workdir),
 		cmd2.ToString(ptyFactory.cmds[0]))
-	require.Equal(t, "tmux attach-session -t claudesquad_test-session",
+	require.Equal(t, fmt.Sprintf("tmux attach-session -t %s", sessName),
 		cmd2.ToString(ptyFactory.cmds[1]))
 
 	require.Equal(t, 2, len(ptyFactory.files))

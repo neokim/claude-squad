@@ -8,10 +8,7 @@ import (
 	"path/filepath"
 )
 
-const (
-	StateFileName     = "state.json"
-	InstancesFileName = "instances.json"
-)
+const StateFileName = "state.json"
 
 // InstanceStorage handles instance-related operations
 type InstanceStorage interface {
@@ -55,7 +52,7 @@ func DefaultState() *State {
 
 // LoadState loads the state from disk. If it cannot be done, we return the default state.
 func LoadState() *State {
-	configDir, err := GetConfigDir()
+	configDir, err := GetRepoConfigDir()
 	if err != nil {
 		log.ErrorLog.Printf("failed to get config directory: %v", err)
 		return DefaultState()
@@ -88,13 +85,9 @@ func LoadState() *State {
 
 // SaveState saves the state to disk
 func SaveState(state *State) error {
-	configDir, err := GetConfigDir()
+	configDir, err := EnsureRepoConfigDir()
 	if err != nil {
 		return fmt.Errorf("failed to get config directory: %w", err)
-	}
-
-	if err := os.MkdirAll(configDir, 0755); err != nil {
-		return fmt.Errorf("failed to create config directory: %w", err)
 	}
 
 	statePath := filepath.Join(configDir, StateFileName)

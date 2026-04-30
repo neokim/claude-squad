@@ -193,44 +193,32 @@ func TestLoadConfig(t *testing.T) {
 	})
 
 	t.Run("defaults max_instances when not set in config file", func(t *testing.T) {
-		tempHome := t.TempDir()
-		configDir := filepath.Join(tempHome, ".claude-squad")
-		err := os.MkdirAll(configDir, 0755)
-		require.NoError(t, err)
+		repo := setupTempRepo(t)
+		configDir := filepath.Join(repo, ".claude-squad")
+		require.NoError(t, os.MkdirAll(configDir, 0755))
 
 		configPath := filepath.Join(configDir, ConfigFileName)
 		configContent := `{
 			"default_program": "claude",
 			"auto_yes": false
 		}`
-		err = os.WriteFile(configPath, []byte(configContent), 0644)
-		require.NoError(t, err)
-
-		originalHome := os.Getenv("HOME")
-		os.Setenv("HOME", tempHome)
-		defer os.Setenv("HOME", originalHome)
+		require.NoError(t, os.WriteFile(configPath, []byte(configContent), 0644))
 
 		config := LoadConfig()
 		assert.Equal(t, DefaultMaxInstances, config.MaxInstances)
 	})
 
 	t.Run("respects custom max_instances", func(t *testing.T) {
-		tempHome := t.TempDir()
-		configDir := filepath.Join(tempHome, ".claude-squad")
-		err := os.MkdirAll(configDir, 0755)
-		require.NoError(t, err)
+		repo := setupTempRepo(t)
+		configDir := filepath.Join(repo, ".claude-squad")
+		require.NoError(t, os.MkdirAll(configDir, 0755))
 
 		configPath := filepath.Join(configDir, ConfigFileName)
 		configContent := `{
 			"default_program": "claude",
 			"max_instances": 25
 		}`
-		err = os.WriteFile(configPath, []byte(configContent), 0644)
-		require.NoError(t, err)
-
-		originalHome := os.Getenv("HOME")
-		os.Setenv("HOME", tempHome)
-		defer os.Setenv("HOME", originalHome)
+		require.NoError(t, os.WriteFile(configPath, []byte(configContent), 0644))
 
 		config := LoadConfig()
 		assert.Equal(t, 25, config.MaxInstances)

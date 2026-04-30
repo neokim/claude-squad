@@ -274,6 +274,9 @@ func (l *List) String() string {
 		lineCount := strings.Count(text, "\n") + 1
 		rendered[i] = listRenderedItem{text: text, lines: lineCount}
 	}
+	if len(rendered) == 0 {
+		return lipgloss.Place(l.width, l.height, lipgloss.Left, lipgloss.Top, b.String())
+	}
 	// Adjust scroll offset to keep the selected item visible.
 	l.adjustScrollOffset(rendered, availableLines)
 

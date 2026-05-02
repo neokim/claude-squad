@@ -364,13 +364,16 @@ func (l *List) adjustScrollOffset(rendered []listRenderedItem, availableLines in
 	}
 }
 
-// Down selects the next item in the list.
+// Down selects the next item in the list. Wraps to top when at the bottom.
 func (l *List) Down() {
 	if len(l.items) == 0 {
 		return
 	}
 	if l.selectedIdx < len(l.items)-1 {
 		l.selectedIdx++
+	} else {
+		l.selectedIdx = 0
+		l.scrollOffset = 0
 	}
 }
 
@@ -414,13 +417,15 @@ func (l *List) Attach() (chan struct{}, error) {
 	return targetInstance.Attach()
 }
 
-// Up selects the prev item in the list.
+// Up selects the prev item in the list. Wraps to bottom when at the top.
 func (l *List) Up() {
 	if len(l.items) == 0 {
 		return
 	}
 	if l.selectedIdx > 0 {
 		l.selectedIdx--
+	} else {
+		l.selectedIdx = len(l.items) - 1
 	}
 }
 
@@ -483,6 +488,26 @@ func (l *List) SelectInstance(target *session.Instance) {
 			return
 		}
 	}
+}
+
+// MoveUp swaps the selected instance with the one above it.
+func (l *List) MoveUp() bool {
+	if l.selectedIdx <= 0 || len(l.items) < 2 {
+		return false
+	}
+	l.items[l.selectedIdx], l.items[l.selectedIdx-1] = l.items[l.selectedIdx-1], l.items[l.selectedIdx]
+	l.selectedIdx--
+	return true
+}
+
+// MoveDown swaps the selected instance with the one below it.
+func (l *List) MoveDown() bool {
+	if l.selectedIdx >= len(l.items)-1 || len(l.items) < 2 {
+		return false
+	}
+	l.items[l.selectedIdx], l.items[l.selectedIdx+1] = l.items[l.selectedIdx+1], l.items[l.selectedIdx]
+	l.selectedIdx++
+	return true
 }
 
 // GetInstances returns all instances in the list

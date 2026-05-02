@@ -455,6 +455,11 @@ func (t *TmuxSession) updateWindowSize(cols, rows int) error {
 	})
 }
 
+// GetSessionName returns the underlying tmux session name (e.g. "claudesquad_<title>").
+func (t *TmuxSession) GetSessionName() string {
+	return t.sanitizedName
+}
+
 func (t *TmuxSession) DoesSessionExist() bool {
 	// Using "-t name" does a prefix match, which is wrong. `-t=` does an exact match.
 	existsCmd := exec.Command("tmux", "has-session", fmt.Sprintf("-t=%s", t.sanitizedName))

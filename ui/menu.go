@@ -170,7 +170,13 @@ func (m *Menu) addInstanceOptions() {
 	}
 
 	// Action group
-	actionGroup := []keys.KeyName{keys.KeyEnter, keys.KeySubmit}
+	actionGroup := []keys.KeyName{keys.KeyEnter}
+	if m.instance.Status != session.Paused {
+		// Attaching from a new OS terminal only makes sense while the tmux
+		// session is alive — i.e. not paused.
+		actionGroup = append(actionGroup, keys.KeyAttachExternal)
+	}
+	actionGroup = append(actionGroup, keys.KeySubmit)
 	if m.instance.Status == session.Paused {
 		actionGroup = append(actionGroup, keys.KeyResume)
 	} else {

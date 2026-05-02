@@ -89,20 +89,28 @@ func RunDaemon(cfg *config.Config) error {
 
 // LaunchDaemon launches the daemon process.
 func LaunchDaemon() error {
-	// Find the claude squad binary.
 	execPath, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("failed to get executable path: %w", err)
 	}
 
-	cmd := exec.Command(execPath, "--daemon")
+	// Pin the daemon's cwd to the repo root so its config/state lookups don't
+	// drift if the parent shell later changes directory.
+	repoRoot, err := config.GetRepoRoot()
+	if err != nil {
+		return fmt.Errorf("failed to get repo root: %w", err)
+	}
 
-	// Detach the process from the parent
+	pidDir, err := config.EnsureRepoConfigDir()
+	if err != nil {
+		return fmt.Errorf("failed to get config directory: %w", err)
+	}
+
+	cmd := exec.Command(execPath, "--daemon")
+	cmd.Dir = repoRoot
 	cmd.Stdin = nil
 	cmd.Stdout = nil
 	cmd.Stderr = nil
-
-	// Set process group to prevent signals from propagating
 	cmd.SysProcAttr = getSysProcAttr()
 
 	if err := cmd.Start(); err != nil {
@@ -111,25 +119,18 @@ func LaunchDaemon() error {
 
 	log.InfoLog.Printf("started daemon child process with PID: %d", cmd.Process.Pid)
 
-	// Save PID to a file for later management
-	pidDir, err := config.GetConfigDir()
-	if err != nil {
-		return fmt.Errorf("failed to get config directory: %w", err)
-	}
-
 	pidFile := filepath.Join(pidDir, "daemon.pid")
 	if err := os.WriteFile(pidFile, []byte(fmt.Sprintf("%d", cmd.Process.Pid)), 0644); err != nil {
 		return fmt.Errorf("failed to write PID file: %w", err)
 	}
 
-	// Don't wait for the child to exit, it's detached
 	return nil
 }
 
 // StopDaemon attempts to stop a running daemon process if it exists. Returns no error if the daemon is not found
 // (assumes the daemon does not exist).
 func StopDaemon() error {
-	pidDir, err := config.GetConfigDir()
+	pidDir, err := config.GetRepoConfigDir()
 	if err != nil {
 		return fmt.Errorf("failed to get config directory: %w", err)
 	}

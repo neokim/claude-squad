@@ -18,15 +18,6 @@ const (
 	DefaultMaxInstances = 10
 )
 
-// GetConfigDir returns the path to the application's configuration directory
-func GetConfigDir() (string, error) {
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("failed to get config home directory: %w", err)
-	}
-	return filepath.Join(homeDir, ".claude-squad"), nil
-}
-
 // Profile represents a named program configuration
 type Profile struct {
 	Name    string `json:"name"`
@@ -157,7 +148,7 @@ func GetClaudeCommand() (string, error) {
 }
 
 func LoadConfig() *Config {
-	configDir, err := GetConfigDir()
+	configDir, err := GetRepoConfigDir()
 	if err != nil {
 		log.ErrorLog.Printf("failed to get config directory: %v", err)
 		return DefaultConfig()
@@ -194,13 +185,9 @@ func LoadConfig() *Config {
 
 // saveConfig saves the configuration to disk
 func saveConfig(config *Config) error {
-	configDir, err := GetConfigDir()
+	configDir, err := EnsureRepoConfigDir()
 	if err != nil {
 		return fmt.Errorf("failed to get config directory: %w", err)
-	}
-
-	if err := os.MkdirAll(configDir, 0755); err != nil {
-		return fmt.Errorf("failed to create config directory: %w", err)
 	}
 
 	configPath := filepath.Join(configDir, ConfigFileName)

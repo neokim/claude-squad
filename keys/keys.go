@@ -22,6 +22,7 @@ const (
 
 	KeyCheckout
 	KeyResume
+	KeyRename // Rename a paused instance
 	KeyPrompt // New key for entering a prompt
 	KeyHelp   // Key for showing help screen
 
@@ -53,6 +54,7 @@ var GlobalKeyStringsMap = map[string]KeyName{
 	"tab":        KeyTab,
 	"c":          KeyCheckout,
 	"r":          KeyResume,
+	"R":          KeyRename,
 	"p":          KeySubmit,
 	"?":          KeyHelp,
 }
@@ -114,6 +116,10 @@ var GlobalkeyBindings = map[KeyName]key.Binding{
 	KeyResume: key.NewBinding(
 		key.WithKeys("r"),
 		key.WithHelp("r", "resume"),
+	),
+	KeyRename: key.NewBinding(
+		key.WithKeys("R"),
+		key.WithHelp("R", "rename"),
 	),
 
 	KeyMoveUp: key.NewBinding(

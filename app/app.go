@@ -43,6 +43,8 @@ const (
 	stateHelp
 	// stateConfirm is the state when a confirmation modal is displayed.
 	stateConfirm
+	// stateRename is the state when the user is renaming a paused instance.
+	stateRename
 )
 
 type home struct {
@@ -354,7 +356,7 @@ func (m *home) handleMenuHighlighting(msg tea.KeyMsg) (cmd tea.Cmd, returnEarly 
 		m.keySent = false
 		return nil, false
 	}
-	if m.state == statePrompt || m.state == stateHelp || m.state == stateConfirm {
+	if m.state == statePrompt || m.state == stateHelp || m.state == stateConfirm || m.state == stateRename {
 		return nil, false
 	}
 	// If it's in the global keymap, we should try to highlight it.
@@ -594,6 +596,33 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m, nil
 	}
 
+	// Handle rename state — single-line input that submits on Enter, cancels on Esc/Ctrl+C.
+	if m.state == stateRename {
+		if msg.String() == "ctrl+c" || msg.Type == tea.KeyEsc {
+			m.textInputOverlay = nil
+			m.state = stateDefault
+			return m, tea.WindowSize()
+		}
+		if msg.Type == tea.KeyEnter {
+			selected := m.list.GetSelectedInstance()
+			newTitle := strings.TrimSpace(m.textInputOverlay.GetValue())
+			m.textInputOverlay = nil
+			m.state = stateDefault
+			if selected == nil {
+				return m, tea.WindowSize()
+			}
+			if err := selected.Rename(newTitle); err != nil {
+				return m, tea.Batch(tea.WindowSize(), m.handleError(err))
+			}
+			if err := m.storage.SaveInstances(m.list.GetInstances()); err != nil {
+				return m, m.handleError(err)
+			}
+			return m, tea.Batch(tea.WindowSize(), m.instanceChanged())
+		}
+		m.textInputOverlay.HandleKeyPress(msg)
+		return m, nil
+	}
+
 	// Exit scrolling mode when ESC is pressed and preview pane is in scrolling mode
 	// Check if Escape key was pressed and we're not in the diff tab (meaning we're in preview tab)
 	// Always check for escape key first to ensure it doesn't get intercepted elsewhere
@@ -794,6 +823,17 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		if err := selected.Resume(); err != nil {
 			return m, m.handleError(err)
 		}
+		return m, tea.WindowSize()
+	case keys.KeyRename:
+		selected := m.list.GetSelectedInstance()
+		if selected == nil || selected.Status == session.Loading {
+			return m, nil
+		}
+		if !selected.Paused() {
+			return m, m.handleError(fmt.Errorf("rename only allowed for paused instances"))
+		}
+		m.state = stateRename
+		m.textInputOverlay = overlay.NewTextInputOverlay("Rename instance", selected.Title)
 		return m, tea.WindowSize()
 	case keys.KeyEnter:
 		if m.list.NumInstances() == 0 {
@@ -1065,7 +1105,7 @@ func (m *home) View() string {
 		m.errBox.String(),
 	)
 
-	if m.state == statePrompt {
+	if m.state == statePrompt || m.state == stateRename {
 		if m.textInputOverlay == nil {
 			log.ErrorLog.Printf("text input overlay is nil")
 		}

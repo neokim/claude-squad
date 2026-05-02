@@ -49,6 +49,11 @@ type Menu struct {
 	instance      *session.Instance
 	activeTab     int
 
+	// actionKeys lists keys that should be rendered with the action-group style.
+	actionKeys map[keys.KeyName]bool
+	// groupEnds is the option indices after which to render a vertical group separator.
+	groupEnds map[int]bool
+
 	// keyDown is the key which is pressed. The default is -1.
 	keyDown keys.KeyName
 }
@@ -102,21 +107,52 @@ func (m *Menu) SetActiveTab(tab int) {
 
 // updateOptions updates the menu options based on current state and instance
 func (m *Menu) updateOptions() {
+	m.actionKeys = nil
+	m.groupEnds = nil
 	switch m.state {
 	case StateEmpty:
-		m.options = defaultMenuOptions
+		m.setGroups([][]keys.KeyName{
+			{keys.KeyNew, keys.KeyPrompt},
+			{keys.KeyHelp, keys.KeyQuit},
+		}, map[int]bool{0: true})
 	case StateDefault:
 		if m.instance != nil {
 			// When there is an instance, show that instance's options
 			m.addInstanceOptions()
 		} else {
 			// When there is no instance, show the empty state
-			m.options = defaultMenuOptions
+			m.setGroups([][]keys.KeyName{
+				{keys.KeyNew, keys.KeyPrompt},
+				{keys.KeyHelp, keys.KeyQuit},
+			}, map[int]bool{0: true})
 		}
 	case StateNewInstance:
 		m.options = newInstanceMenuOptions
 	case StatePrompt:
 		m.options = promptMenuOptions
+	}
+}
+
+// setGroups assigns the menu's options as a flat list and records group boundaries +
+// which keys should render with the action-group style.
+func (m *Menu) setGroups(groups [][]keys.KeyName, actionGroupIdx map[int]bool) {
+	m.options = nil
+	m.actionKeys = make(map[keys.KeyName]bool)
+	m.groupEnds = make(map[int]bool)
+
+	cursor := 0
+	for gi, g := range groups {
+		for _, k := range g {
+			m.options = append(m.options, k)
+			if actionGroupIdx[gi] {
+				m.actionKeys[k] = true
+			}
+		}
+		cursor += len(g)
+		// Record a separator after each group except the last.
+		if gi != len(groups)-1 && len(g) > 0 {
+			m.groupEnds[cursor-1] = true
+		}
 	}
 }
 
@@ -128,7 +164,10 @@ func (m *Menu) addInstanceOptions() {
 	}
 
 	// Instance management group
-	options := []keys.KeyName{keys.KeyNew, keys.KeyKill}
+	mgmtGroup := []keys.KeyName{keys.KeyNew, keys.KeyKill}
+	if m.instance.Status == session.Paused {
+		mgmtGroup = append(mgmtGroup, keys.KeyRename)
+	}
 
 	// Action group
 	actionGroup := []keys.KeyName{keys.KeyEnter, keys.KeySubmit}
@@ -146,11 +185,10 @@ func (m *Menu) addInstanceOptions() {
 	// System group
 	systemGroup := []keys.KeyName{keys.KeyTab, keys.KeyHelp, keys.KeyQuit}
 
-	// Combine all groups
-	options = append(options, actionGroup...)
-	options = append(options, systemGroup...)
-
-	m.options = options
+	m.setGroups(
+		[][]keys.KeyName{mgmtGroup, actionGroup, systemGroup},
+		map[int]bool{1: true},
+	)
 }
 
 // SetSize sets the width of the window. The menu will be centered horizontally within this width.
@@ -161,16 +199,6 @@ func (m *Menu) SetSize(width, height int) {
 
 func (m *Menu) String() string {
 	var s strings.Builder
-
-	// Define group boundaries
-	groups := []struct {
-		start int
-		end   int
-	}{
-		{0, 2}, // Instance management group (n, d)
-		{2, 5}, // Action group (enter, submit, pause/resume)
-		{6, 8}, // System group (tab, help, q)
-	}
 
 	for i, k := range m.options {
 		binding := keys.GlobalkeyBindings[k]
@@ -186,17 +214,7 @@ func (m *Menu) String() string {
 			localDescStyle = localDescStyle.Underline(true)
 		}
 
-		var inActionGroup bool
-		switch m.state {
-		case StateEmpty:
-			// For empty state, the action group is the first group
-			inActionGroup = i <= 1
-		default:
-			// For other states, the action group is the second group
-			inActionGroup = i >= groups[1].start && i < groups[1].end
-		}
-
-		if inActionGroup {
+		if m.actionKeys[k] {
 			s.WriteString(localActionStyle.Render(binding.Help().Key))
 			s.WriteString(" ")
 			s.WriteString(localActionStyle.Render(binding.Help().Desc))
@@ -208,15 +226,9 @@ func (m *Menu) String() string {
 
 		// Add appropriate separator
 		if i != len(m.options)-1 {
-			isGroupEnd := false
-			for _, group := range groups {
-				if i == group.end-1 {
-					s.WriteString(sepStyle.Render(verticalSeparator))
-					isGroupEnd = true
-					break
-				}
-			}
-			if !isGroupEnd {
+			if m.groupEnds[i] {
+				s.WriteString(sepStyle.Render(verticalSeparator))
+			} else {
 				s.WriteString(sepStyle.Render(separator))
 			}
 		}

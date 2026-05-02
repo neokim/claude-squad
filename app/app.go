@@ -18,7 +18,6 @@ import (
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/mattn/go-runewidth"
 )
 
 // Run is the main entrypoint into the application.
@@ -445,18 +444,40 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 
 			return m, tea.Batch(tea.WindowSize(), m.instanceChanged(), startCmd)
 		case tea.KeyRunes:
-			if runewidth.StringWidth(instance.Title) >= 32 {
-				return m, m.handleError(fmt.Errorf("title cannot be longer than 32 characters"))
-			}
 			if err := instance.SetTitle(instance.Title + string(msg.Runes)); err != nil {
 				return m, m.handleError(err)
 			}
 		case tea.KeyBackspace:
-			runes := []rune(instance.Title)
-			if len(runes) == 0 {
-				return m, nil
+			if msg.Alt {
+				// Alt+Backspace: delete last word
+				runes := []rune(instance.Title)
+				if len(runes) == 0 {
+					return m, nil
+				}
+				// Skip trailing spaces
+				i := len(runes) - 1
+				for i >= 0 && runes[i] == ' ' {
+					i--
+				}
+				// Skip word characters
+				for i >= 0 && runes[i] != ' ' {
+					i--
+				}
+				if err := instance.SetTitle(string(runes[:i+1])); err != nil {
+					return m, m.handleError(err)
+				}
+			} else {
+				runes := []rune(instance.Title)
+				if len(runes) == 0 {
+					return m, nil
+				}
+				if err := instance.SetTitle(string(runes[:len(runes)-1])); err != nil {
+					return m, m.handleError(err)
+				}
 			}
-			if err := instance.SetTitle(string(runes[:len(runes)-1])); err != nil {
+		case tea.KeyCtrlU:
+			// Ctrl+U: clear entire title
+			if err := instance.SetTitle(""); err != nil {
 				return m, m.handleError(err)
 			}
 		case tea.KeySpace:

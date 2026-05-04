@@ -319,6 +319,21 @@ func (i *Instance) combineErrors(errs []error) error {
 	return fmt.Errorf("%s", errMsg)
 }
 
+// IsWorktreeOrphan reports whether the instance's git worktree is missing the
+// state git needs (worktree dir, .git pointer, or admin gitdir target). When
+// true, normal Pause operations like dirty-check or `git worktree remove`
+// will fail and the worktree dir must be cleaned up directly.
+func (i *Instance) IsWorktreeOrphan() (bool, error) {
+	if !i.started || i.gitWorktree == nil || i.Status == Paused {
+		return false, nil
+	}
+	valid, err := i.gitWorktree.IsValidWorktree()
+	if err != nil {
+		return false, err
+	}
+	return !valid, nil
+}
+
 func (i *Instance) Preview() (string, error) {
 	if !i.started || i.Status == Paused {
 		return "", nil

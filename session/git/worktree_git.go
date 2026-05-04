@@ -160,8 +160,9 @@ func (g *GitWorktree) IsDirty() (bool, error) {
 }
 
 // IsValidWorktree reports whether the worktree path exists and contains a
-// .git entry, i.e. git can still recognize it as a working tree.
-// Returns (false, nil) if the worktree is orphaned (path or .git missing).
+// .git entry that still resolves to a live admin directory in the main repo.
+// Returns (false, nil) when the worktree is orphaned (path missing, .git
+// missing, or the gitdir target the .git pointer file references is gone).
 func (g *GitWorktree) IsValidWorktree() (bool, error) {
 	if _, err := os.Stat(g.worktreePath); err != nil {
 		if os.IsNotExist(err) {
@@ -169,13 +170,59 @@ func (g *GitWorktree) IsValidWorktree() (bool, error) {
 		}
 		return false, fmt.Errorf("failed to stat worktree path: %w", err)
 	}
-	if _, err := os.Stat(filepath.Join(g.worktreePath, ".git")); err != nil {
+	gitEntry := filepath.Join(g.worktreePath, ".git")
+	info, err := os.Stat(gitEntry)
+	if err != nil {
 		if os.IsNotExist(err) {
 			return false, nil
 		}
 		return false, fmt.Errorf("failed to stat worktree .git: %w", err)
 	}
+	// A worktree's .git is a regular file containing "gitdir: <admin-dir>".
+	// If the admin directory was removed (e.g. by `git worktree prune` while
+	// the worktree directory was temporarily missing), all git operations on
+	// this worktree fail with "not a git repository".
+	if !info.IsDir() {
+		gitdir, err := readWorktreeGitdir(gitEntry)
+		if err != nil {
+			return false, fmt.Errorf("failed to read worktree .git pointer: %w", err)
+		}
+		if gitdir == "" {
+			return false, nil
+		}
+		if _, err := os.Stat(gitdir); err != nil {
+			if os.IsNotExist(err) {
+				return false, nil
+			}
+			return false, fmt.Errorf("failed to stat worktree gitdir: %w", err)
+		}
+	}
 	return true, nil
+}
+
+// readWorktreeGitdir parses the "gitdir: <path>" line from a worktree .git
+// pointer file. Returns an absolute path (resolving any relative reference
+// against the pointer file's directory) or "" if the file lacks the line.
+func readWorktreeGitdir(gitFile string) (string, error) {
+	data, err := os.ReadFile(gitFile)
+	if err != nil {
+		return "", err
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		rest, ok := strings.CutPrefix(strings.TrimSpace(line), "gitdir:")
+		if !ok {
+			continue
+		}
+		gitdir := strings.TrimSpace(rest)
+		if gitdir == "" {
+			return "", nil
+		}
+		if !filepath.IsAbs(gitdir) {
+			gitdir = filepath.Join(filepath.Dir(gitFile), gitdir)
+		}
+		return gitdir, nil
+	}
+	return "", nil
 }
 
 // IsBranchCheckedOut checks if the instance branch is currently checked out

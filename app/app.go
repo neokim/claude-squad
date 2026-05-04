@@ -790,14 +790,33 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 			return m, nil
 		}
 
-		// Show help screen before pausing
-		m.showHelpScreen(helpTypeInstanceCheckout{}, func() {
+		pauseAction := func() {
 			if err := selected.Pause(); err != nil {
 				m.handleError(err)
 			}
 			m.tabbedWindow.CleanupTerminalForInstance(selected.Title)
 			m.instanceChanged()
-		})
+		}
+
+		// If git can't operate on the worktree (admin dir gone, etc.) Pause
+		// will skip the dirty-check + commit step, so any uncommitted work
+		// is unrecoverable. Confirm with the user before proceeding instead
+		// of silently dropping the directory.
+		if orphan, err := selected.IsWorktreeOrphan(); err != nil {
+			return m, m.handleError(err)
+		} else if orphan {
+			message := fmt.Sprintf(
+				"[!] Worktree for '%s' is broken (missing git metadata). Uncommitted changes cannot be recovered. Continue checkout?",
+				selected.Title,
+			)
+			return m, m.confirmAction(message, func() tea.Msg {
+				pauseAction()
+				return nil
+			})
+		}
+
+		// Show help screen before pausing
+		m.showHelpScreen(helpTypeInstanceCheckout{}, pauseAction)
 		return m, nil
 	case keys.KeyMoveUp:
 		if m.list.MoveUp() {

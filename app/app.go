@@ -645,7 +645,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 	}
 
 	// Handle quit commands first
-	if msg.String() == "ctrl+c" || msg.String() == "q" {
+	if msg.String() == "ctrl+c" || msg.String() == "q" || msg.String() == "ㅂ" {
 		return m.handleQuit()
 	}
 

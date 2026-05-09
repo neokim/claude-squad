@@ -61,6 +61,20 @@ var GlobalKeyStringsMap = map[string]KeyName{
 	"?":          KeyHelp,
 	"A":          KeyAttachExternal,
 	"S":          KeyRestartInstance,
+
+	// Korean 두벌식 자모. Shift 변형이 없는 자모는 일반 키 동작만 매핑 (Shift 동작은 한글 모드에서 포기).
+	"ㅂ": KeyQuit,
+	"ㅓ": KeyDown, // shift+j도 ㅓ → KeyMoveDown 포기
+	"ㅏ": KeyUp,   // shift+k도 ㅏ → KeyMoveUp 포기
+	"ㅊ": KeyCheckout,
+	"ㄱ": KeyResume,
+	"ㄲ": KeyRename,
+	"ㅔ": KeySubmit,
+	"ㅐ": KeyEnter,
+	"ㅁ": KeyAttachExternal,
+	"ㄴ": KeyRestartInstance,
+	"ㅇ": KeyKill,
+	"ㅜ": KeyNew, // shift+n도 ㅜ → KeyPrompt 포기
 }
 
 // GlobalkeyBindings is a global, immutable map of KeyName tot keybinding.

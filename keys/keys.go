@@ -59,7 +59,7 @@ var GlobalKeyStringsMap = map[string]KeyName{
 	"R":          KeyRename,
 	"p":          KeySubmit,
 	"?":          KeyHelp,
-	"a":          KeyAttachExternal,
+	"A":          KeyAttachExternal,
 	"S":          KeyRestartInstance,
 }
 
@@ -135,8 +135,8 @@ var GlobalkeyBindings = map[KeyName]key.Binding{
 		key.WithHelp("J", "move down"),
 	),
 	KeyAttachExternal: key.NewBinding(
-		key.WithKeys("a"),
-		key.WithHelp("a", "attach in new window"),
+		key.WithKeys("A"),
+		key.WithHelp("A", "attach in new window"),
 	),
 	KeyRestartInstance: key.NewBinding(
 		key.WithKeys("S"),

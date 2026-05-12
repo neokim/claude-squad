@@ -490,20 +490,34 @@ func (l *List) SelectInstance(target *session.Instance) {
 	}
 }
 
-// MoveUp swaps the selected instance with the one above it.
+// MoveUp swaps the selected instance with the one above it. Wraps to the
+// bottom when at the top.
 func (l *List) MoveUp() bool {
-	if l.selectedIdx <= 0 || len(l.items) < 2 {
+	if len(l.items) < 2 {
 		return false
+	}
+	if l.selectedIdx <= 0 {
+		first := l.items[0]
+		l.items = append(l.items[1:], first)
+		l.selectedIdx = len(l.items) - 1
+		return true
 	}
 	l.items[l.selectedIdx], l.items[l.selectedIdx-1] = l.items[l.selectedIdx-1], l.items[l.selectedIdx]
 	l.selectedIdx--
 	return true
 }
 
-// MoveDown swaps the selected instance with the one below it.
+// MoveDown swaps the selected instance with the one below it. Wraps to the
+// top when at the bottom.
 func (l *List) MoveDown() bool {
-	if l.selectedIdx >= len(l.items)-1 || len(l.items) < 2 {
+	if len(l.items) < 2 {
 		return false
+	}
+	if l.selectedIdx >= len(l.items)-1 {
+		last := l.items[len(l.items)-1]
+		l.items = append([]*session.Instance{last}, l.items[:len(l.items)-1]...)
+		l.selectedIdx = 0
+		return true
 	}
 	l.items[l.selectedIdx], l.items[l.selectedIdx+1] = l.items[l.selectedIdx+1], l.items[l.selectedIdx]
 	l.selectedIdx++

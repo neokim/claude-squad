@@ -253,14 +253,16 @@ func TestMoveUp(t *testing.T) {
 	require.Equal(t, "c", l.items[2].Title)
 }
 
-func TestMoveUp_AtTop(t *testing.T) {
+func TestMoveUp_AtTop_WrapsToBottom(t *testing.T) {
 	l := newTestListWithTitles("a", "b", "c")
 	l.SetSelectedInstance(0)
 
 	moved := l.MoveUp()
-	require.False(t, moved)
-	require.Equal(t, 0, l.selectedIdx)
-	require.Equal(t, "a", l.items[0].Title)
+	require.True(t, moved)
+	require.Equal(t, 2, l.selectedIdx)
+	require.Equal(t, "b", l.items[0].Title)
+	require.Equal(t, "c", l.items[1].Title)
+	require.Equal(t, "a", l.items[2].Title)
 }
 
 func TestMoveDown(t *testing.T) {
@@ -275,14 +277,16 @@ func TestMoveDown(t *testing.T) {
 	require.Equal(t, "b", l.items[2].Title)
 }
 
-func TestMoveDown_AtBottom(t *testing.T) {
+func TestMoveDown_AtBottom_WrapsToTop(t *testing.T) {
 	l := newTestListWithTitles("a", "b", "c")
 	l.SetSelectedInstance(2)
 
 	moved := l.MoveDown()
-	require.False(t, moved)
-	require.Equal(t, 2, l.selectedIdx)
-	require.Equal(t, "c", l.items[2].Title)
+	require.True(t, moved)
+	require.Equal(t, 0, l.selectedIdx)
+	require.Equal(t, "c", l.items[0].Title)
+	require.Equal(t, "a", l.items[1].Title)
+	require.Equal(t, "b", l.items[2].Title)
 }
 
 func TestMoveWithSingleItem(t *testing.T) {

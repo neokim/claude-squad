@@ -100,6 +100,11 @@ type home struct {
 	textOverlay *overlay.TextOverlay
 	// confirmationOverlay displays confirmation modals
 	confirmationOverlay *overlay.ConfirmationOverlay
+
+	// contentHeight caps the height of list/tabbedWindow output in View() so
+	// any component that overflows its SetSize height can't push the layout
+	// past the terminal height.
+	contentHeight int
 }
 
 func newHome(ctx context.Context, program string, autoYes bool) *home {
@@ -164,6 +169,7 @@ func (m *home) updateHandleWindowSizeEvent(msg tea.WindowSizeMsg) {
 
 	m.tabbedWindow.SetSize(tabsWidth, contentHeight)
 	m.list.SetSize(listWidth, contentHeight)
+	m.contentHeight = contentHeight
 
 	if m.textInputOverlay != nil {
 		m.textInputOverlay.SetSize(int(float32(msg.Width)*0.6), int(float32(msg.Height)*0.4))
@@ -1148,13 +1154,26 @@ func (m *home) confirmAction(message string, action tea.Cmd) tea.Cmd {
 	return nil
 }
 
+// clipHeight returns at most maxLines lines from s. Used as a defensive cap
+// so a misbehaving component can't push the layout past the terminal height.
+func clipHeight(s string, maxLines int) string {
+	if maxLines <= 0 {
+		return ""
+	}
+	lines := strings.Split(s, "\n")
+	if len(lines) > maxLines {
+		lines = lines[:maxLines]
+	}
+	return strings.Join(lines, "\n")
+}
+
 func (m *home) View() string {
-	listWithPadding := lipgloss.NewStyle().PaddingTop(1).Render(m.list.String())
-	previewWithPadding := lipgloss.NewStyle().PaddingTop(1).Render(m.tabbedWindow.String())
+	listWithPadding := lipgloss.NewStyle().PaddingTop(1).Render(clipHeight(m.list.String(), m.contentHeight))
+	previewWithPadding := lipgloss.NewStyle().PaddingTop(1).Render(clipHeight(m.tabbedWindow.String(), m.contentHeight))
 	listAndPreview := lipgloss.JoinHorizontal(lipgloss.Top, listWithPadding, previewWithPadding)
 
 	mainView := lipgloss.JoinVertical(
-		lipgloss.Center,
+		lipgloss.Left,
 		listAndPreview,
 		m.menu.String(),
 		m.errBox.String(),

@@ -232,7 +232,10 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool, h
 }
 
 func (l *List) String() string {
-	const titleText = " Instances "
+	titleText := " Instances "
+	if total := len(l.items); total > 0 {
+		titleText = fmt.Sprintf(" Instances %d/%d ", l.selectedIdx+1, total)
+	}
 	const autoYesText = " auto-yes "
 
 	// Write the title.

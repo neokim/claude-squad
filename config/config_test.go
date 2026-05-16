@@ -122,12 +122,12 @@ func TestDefaultConfig(t *testing.T) {
 		config := DefaultConfig()
 
 		assert.NotNil(t, config)
-		assert.NotEmpty(t, config.DefaultProgram)
+		assert.Equal(t, "/opt/homebrew/bin/claude --dangerously-skip-permissions", config.DefaultProgram)
 		assert.False(t, config.AutoYes)
 		assert.Equal(t, 1000, config.DaemonPollInterval)
 		assert.Equal(t, DefaultMaxInstances, config.MaxInstances)
-		assert.NotEmpty(t, config.BranchPrefix)
-		assert.True(t, strings.HasSuffix(config.BranchPrefix, "/"))
+		assert.Equal(t, 50, config.MaxInstances)
+		assert.Equal(t, "cs/_", config.BranchPrefix)
 	})
 
 }

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"os/user"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -14,8 +13,9 @@ import (
 
 const (
 	ConfigFileName      = "config.json"
-	defaultProgram      = "claude"
-	DefaultMaxInstances = 10
+	defaultProgram      = "/opt/homebrew/bin/claude --dangerously-skip-permissions"
+	defaultBranchPrefix = "cs/_"
+	DefaultMaxInstances = 50
 )
 
 // Profile represents a named program configuration
@@ -77,25 +77,12 @@ func (c *Config) GetProfiles() []Profile {
 
 // DefaultConfig returns the default configuration
 func DefaultConfig() *Config {
-	program, err := GetClaudeCommand()
-	if err != nil {
-		log.ErrorLog.Printf("failed to get claude command: %v", err)
-		program = defaultProgram
-	}
-
 	return &Config{
-		DefaultProgram:     program,
+		DefaultProgram:     defaultProgram,
 		AutoYes:            false,
 		DaemonPollInterval: 1000,
 		MaxInstances:       DefaultMaxInstances,
-		BranchPrefix: func() string {
-			user, err := user.Current()
-			if err != nil || user == nil || user.Username == "" {
-				log.ErrorLog.Printf("failed to get current user: %v", err)
-				return "session/"
-			}
-			return fmt.Sprintf("%s/", strings.ToLower(user.Username))
-		}(),
+		BranchPrefix:       defaultBranchPrefix,
 	}
 }
 

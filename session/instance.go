@@ -2,6 +2,7 @@ package session
 
 import (
 	"bytes"
+	"claude-squad/config"
 	"claude-squad/log"
 	"claude-squad/session/git"
 	"claude-squad/session/tmux"
@@ -672,6 +673,8 @@ func (i *Instance) Pause() error {
 		return fmt.Errorf("instance is already paused")
 	}
 
+	copyInstanceName := config.LoadConfig().ShouldCopyInstanceNameOnCheckout()
+
 	var errs []error
 
 	// If the worktree is orphaned (path or .git missing), git cannot operate
@@ -697,7 +700,9 @@ func (i *Instance) Pause() error {
 			log.ErrorLog.Print(err)
 		}
 		i.SetStatus(Paused)
-		_ = clipboard.WriteAll(i.gitWorktree.GetBranchName())
+		if copyInstanceName {
+			_ = clipboard.WriteAll(i.gitWorktree.GetBranchName())
+		}
 		return i.combineErrors(errs)
 	}
 
@@ -741,7 +746,9 @@ func (i *Instance) Pause() error {
 	}
 
 	i.SetStatus(Paused)
-	_ = clipboard.WriteAll(i.gitWorktree.GetBranchName())
+	if copyInstanceName {
+		_ = clipboard.WriteAll(i.gitWorktree.GetBranchName())
+	}
 
 	if err := i.combineErrors(errs); err != nil {
 		log.ErrorLog.Print(err)

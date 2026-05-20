@@ -27,7 +27,9 @@ type helpTypeInstanceStart struct {
 
 type helpTypeInstanceAttach struct{}
 
-type helpTypeInstanceCheckout struct{}
+type helpTypeInstanceCheckout struct {
+	copyInstanceNameOnCheckout bool
+}
 
 func helpStart(instance *session.Instance) helpText {
 	return helpTypeInstanceStart{instance: instance}
@@ -95,10 +97,14 @@ func (h helpTypeInstanceAttach) toContent() string {
 }
 
 func (h helpTypeInstanceCheckout) toContent() string {
+	intro := "Changes will be committed locally."
+	if h.copyInstanceNameOnCheckout {
+		intro += " The branch name has been copied to your clipboard for you to checkout."
+	}
 	content := lipgloss.JoinVertical(lipgloss.Left,
 		titleStyle.Render("Checkout Instance"),
 		"",
-		"Changes will be committed locally. The branch name has been copied to your clipboard for you to checkout.",
+		intro,
 		"",
 		"Feel free to make changes to the branch and commit them. When resuming, the session will continue from where you left off.",
 		"",

@@ -121,11 +121,14 @@ func newHome(ctx context.Context, program string, autoYes bool) *home {
 		os.Exit(1)
 	}
 
+	previewPane := ui.NewPreviewPane()
+	previewPane.SetCopyInstanceNameOnCheckout(appConfig.ShouldCopyInstanceNameOnCheckout())
+
 	h := &home{
 		ctx:          ctx,
 		spinner:      spinner.New(spinner.WithSpinner(spinner.MiniDot)),
 		menu:         ui.NewMenu(),
-		tabbedWindow: ui.NewTabbedWindow(ui.NewPreviewPane(), ui.NewDiffPane(), ui.NewTerminalPane()),
+		tabbedWindow: ui.NewTabbedWindow(previewPane, ui.NewDiffPane(), ui.NewTerminalPane()),
 		errBox:       ui.NewErrBox(),
 		storage:      storage,
 		appConfig:    appConfig,
@@ -822,7 +825,9 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		}
 
 		// Show help screen before pausing
-		m.showHelpScreen(helpTypeInstanceCheckout{}, pauseAction)
+		m.showHelpScreen(helpTypeInstanceCheckout{
+			copyInstanceNameOnCheckout: m.appConfig.ShouldCopyInstanceNameOnCheckout(),
+		}, pauseAction)
 		return m, nil
 	case keys.KeyMoveUp:
 		if m.list.MoveUp() {

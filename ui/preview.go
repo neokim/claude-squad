@@ -19,6 +19,8 @@ type PreviewPane struct {
 	previewState previewState
 	isScrolling  bool
 	viewport     viewport.Model
+
+	copyInstanceNameOnCheckout bool
 }
 
 type previewState struct {
@@ -32,6 +34,12 @@ func NewPreviewPane() *PreviewPane {
 	return &PreviewPane{
 		viewport: viewport.New(0, 0),
 	}
+}
+
+// SetCopyInstanceNameOnCheckout configures whether the paused-instance message
+// notes that the branch name was copied to the clipboard.
+func (p *PreviewPane) SetCopyInstanceNameOnCheckout(enabled bool) {
+	p.copyInstanceNameOnCheckout = enabled
 }
 
 func (p *PreviewPane) SetSize(width, maxHeight int) {
@@ -59,6 +67,10 @@ func (p *PreviewPane) UpdateContent(instance *session.Instance) error {
 		p.setFallbackState("Setting up workspace...")
 		return nil
 	case instance.Status == session.Paused:
+		checkoutLine := fmt.Sprintf("The instance can be checked out at '%s'", instance.Branch)
+		if p.copyInstanceNameOnCheckout {
+			checkoutLine += " (copied to your clipboard)"
+		}
 		p.setFallbackState(lipgloss.JoinVertical(lipgloss.Center,
 			"Session is paused. Press 'r' to resume.",
 			"",
@@ -67,10 +79,7 @@ func (p *PreviewPane) UpdateContent(instance *session.Instance) error {
 					Light: "#FFD700",
 					Dark:  "#FFD700",
 				}).
-				Render(fmt.Sprintf(
-					"The instance can be checked out at '%s' (copied to your clipboard)",
-					instance.Branch,
-				)),
+				Render(checkoutLine),
 		))
 		return nil
 	}

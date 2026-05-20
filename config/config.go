@@ -38,6 +38,16 @@ type Config struct {
 	Profiles []Profile `json:"profiles,omitempty"`
 	// MaxInstances is the maximum number of instances that can be open at the same time.
 	MaxInstances int `json:"max_instances"`
+	// CopyInstanceNameOnCheckout copies the instance's branch name to the
+	// clipboard when the instance is checked out (paused). Defaults to true.
+	CopyInstanceNameOnCheckout *bool `json:"copy_instance_name_on_checkout,omitempty"`
+}
+
+// ShouldCopyInstanceNameOnCheckout reports whether the branch name should be
+// copied to the clipboard on checkout. Treats a nil/missing field as enabled
+// so existing configs keep prior behavior.
+func (c *Config) ShouldCopyInstanceNameOnCheckout() bool {
+	return c.CopyInstanceNameOnCheckout == nil || *c.CopyInstanceNameOnCheckout
 }
 
 // GetProgram returns the program to run. If Profiles is non-empty and
@@ -77,12 +87,14 @@ func (c *Config) GetProfiles() []Profile {
 
 // DefaultConfig returns the default configuration
 func DefaultConfig() *Config {
+	copyInstanceNameOnCheckout := true
 	return &Config{
-		DefaultProgram:     defaultProgram,
-		AutoYes:            false,
-		DaemonPollInterval: 1000,
-		MaxInstances:       DefaultMaxInstances,
-		BranchPrefix:       defaultBranchPrefix,
+		DefaultProgram:             defaultProgram,
+		AutoYes:                    false,
+		DaemonPollInterval:         1000,
+		MaxInstances:               DefaultMaxInstances,
+		BranchPrefix:               defaultBranchPrefix,
+		CopyInstanceNameOnCheckout: &copyInstanceNameOnCheckout,
 	}
 }
 

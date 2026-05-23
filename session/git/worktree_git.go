@@ -225,6 +225,7 @@ func readWorktreeGitdir(gitFile string) (string, error) {
 	return "", nil
 }
 
+
 // IsBranchCheckedOut checks if the instance branch is currently checked out
 func (g *GitWorktree) IsBranchCheckedOut() (bool, error) {
 	output, err := g.runGitCommand(g.repoPath, "branch", "--show-current")

@@ -53,6 +53,30 @@ var autoYesStyle = lipgloss.NewStyle().
 	Background(lipgloss.Color("#dde4f0")).
 	Foreground(lipgloss.Color("#1a1a1a"))
 
+// matchHighlightStyle highlights search-matched characters in unselected
+// titles by changing the background color (vim-style hlsearch).
+var matchHighlightStyle = lipgloss.NewStyle().
+	Bold(true).
+	Background(lipgloss.Color("#ffd54f")).
+	Foreground(lipgloss.Color("#1a1a1a"))
+
+// matchHighlightSelectedStyle highlights search-matched characters within the
+// selected row. The selected row already has a distinct background, so here
+// we only change the foreground so the row's selection background stays intact.
+var matchHighlightSelectedStyle = lipgloss.NewStyle().
+	Bold(true).
+	Background(lipgloss.Color("#dde4f0")).
+	Foreground(lipgloss.Color("#c44500"))
+
+// selectedInnerStyle paints the selection background on each character of the
+// selected title. We have to render character-by-character so that the
+// highlighted match characters can interleave without losing their background;
+// ANSI resets break lipgloss's outer-background inheritance, so every segment
+// must declare the background itself.
+var selectedInnerStyle = lipgloss.NewStyle().
+	Background(lipgloss.Color("#dde4f0")).
+	Foreground(lipgloss.AdaptiveColor{Light: "#1a1a1a", Dark: "#1a1a1a"})
+
 type listRenderedItem struct {
 	text  string
 	lines int
@@ -65,6 +89,10 @@ type List struct {
 	height, width int
 	renderer      *InstanceRenderer
 	autoyes       bool
+
+	// searchQuery is the active search query (empty when no search is in progress).
+	// Used so the renderer can highlight matching characters in instance titles.
+	searchQuery string
 
 	// map of repo name to number of instances using it. Used to display the repo name only if there are
 	// multiple repos in play.
@@ -120,7 +148,7 @@ func (r *InstanceRenderer) setWidth(width int) {
 // ɹ and ɻ are other options.
 const branchIcon = "Ꮧ"
 
-func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool, hasMultipleRepos bool) string {
+func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool, hasMultipleRepos bool, searchQuery string) string {
 	prefix := fmt.Sprintf(" %d. ", idx)
 	if idx >= 10 {
 		prefix = prefix[:len(prefix)-1]
@@ -132,15 +160,31 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool, h
 		descS = listDescStyle
 	}
 
-	// add spinner next to title if it's running
+	// add spinner next to title if it's running.
+	// When the row is selected, every cell of the status icon must declare the
+	// selection background explicitly — lipgloss doesn't fill an outer
+	// background into inner ANSI-styled segments (icons set only foreground).
+	selBg := lipgloss.Color("#dde4f0")
+	readyS := readyStyle
+	pausedS := pausedStyle
+	if selected {
+		readyS = readyS.Background(selBg)
+		pausedS = pausedS.Background(selBg)
+	}
 	var join string
 	switch i.Status {
 	case session.Running, session.Loading:
-		join = fmt.Sprintf("%s ", r.spinner.View())
+		spin := r.spinner.View()
+		trailing := " "
+		if selected {
+			spin = lipgloss.NewStyle().Background(selBg).Render(spin)
+			trailing = selectedInnerStyle.Render(trailing)
+		}
+		join = spin + trailing
 	case session.Ready:
-		join = readyStyle.Render(readyIcon)
+		join = readyS.Render(readyIcon)
 	case session.Paused:
-		join = pausedStyle.Render(pausedIcon)
+		join = pausedS.Render(pausedIcon)
 	default:
 	}
 
@@ -150,10 +194,22 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool, h
 	if widthAvail > 0 && runewidth.StringWidth(titleText) > widthAvail {
 		titleText = runewidth.Truncate(titleText, widthAvail-3, "...")
 	}
+	titleInner := highlightTitle(prefix, titleText, searchQuery, selected)
+	var placeOpts []lipgloss.WhitespaceOption
+	sep := " "
+	if selected {
+		// When inner content contains ANSI-styled segments, lipgloss does NOT
+		// auto-fill the outer style's background on the padding cells. We have
+		// to declare it explicitly on the Place padding AND on the separator
+		// between title and status icon, otherwise the row's selection
+		// background breaks after the first styled segment.
+		placeOpts = append(placeOpts, lipgloss.WithWhitespaceBackground(lipgloss.Color("#dde4f0")))
+		sep = selectedInnerStyle.Render(" ")
+	}
 	title := titleS.Render(lipgloss.JoinHorizontal(
 		lipgloss.Left,
-		lipgloss.Place(r.width-3, 1, lipgloss.Left, lipgloss.Center, fmt.Sprintf("%s %s", prefix, titleText)),
-		" ",
+		lipgloss.Place(r.width-3, 1, lipgloss.Left, lipgloss.Center, titleInner, placeOpts...),
+		sep,
 		join,
 	))
 
@@ -273,7 +329,7 @@ func (l *List) String() string {
 	// Render all items and measure their line heights (without separator).
 	rendered := make([]listRenderedItem, len(l.items))
 	for i, item := range l.items {
-		text := l.renderer.Render(item, i+1, i == l.selectedIdx, len(l.repos) > 1)
+		text := l.renderer.Render(item, i+1, i == l.selectedIdx, len(l.repos) > 1, l.searchQuery)
 		lineCount := strings.Count(text, "\n") + 1
 		rendered[i] = listRenderedItem{text: text, lines: lineCount}
 	}
@@ -552,6 +608,63 @@ func (l *List) Search(query string) []int {
 		}
 	}
 	return matches
+}
+
+// SetSearchQuery records the active search query so the renderer can
+// highlight matched characters in instance titles. An empty string disables
+// highlighting.
+func (l *List) SetSearchQuery(q string) {
+	l.searchQuery = q
+}
+
+// highlightTitle renders "<prefix> <titleText>" with matching characters of
+// titleText highlighted according to searchQuery. If searchQuery is empty or
+// doesn't match (e.g. truncated title lost the match), the plain string is
+// returned. Matching is re-computed against the (possibly truncated) titleText
+// so highlighting stays correct after ellipsizing.
+//
+// For the selected row, every character (including non-matching ones and the
+// prefix) is wrapped in selectedInnerStyle so that the selection background
+// stays continuous — ANSI reset after a match segment otherwise blanks the
+// background of the following plain characters.
+func highlightTitle(prefix, titleText, searchQuery string, selected bool) string {
+	plain := prefix + " " + titleText
+	if searchQuery == "" {
+		return plain
+	}
+	q := []rune(strings.ToLower(searchQuery))
+	t := []rune(strings.ToLower(titleText))
+	positions := subsequenceMatchPositions(q, t)
+	if len(positions) == 0 {
+		return plain
+	}
+	matchStyle := matchHighlightStyle
+	if selected {
+		matchStyle = matchHighlightSelectedStyle
+	}
+	matchSet := make(map[int]bool, len(positions))
+	for _, idx := range positions {
+		matchSet[idx] = true
+	}
+	runes := []rune(titleText)
+	var sb strings.Builder
+	if selected {
+		sb.WriteString(selectedInnerStyle.Render(prefix + " "))
+	} else {
+		sb.WriteString(prefix)
+		sb.WriteString(" ")
+	}
+	for i, ch := range runes {
+		switch {
+		case matchSet[i]:
+			sb.WriteString(matchStyle.Render(string(ch)))
+		case selected:
+			sb.WriteString(selectedInnerStyle.Render(string(ch)))
+		default:
+			sb.WriteString(string(ch))
+		}
+	}
+	return sb.String()
 }
 
 // subsequenceMatchPositions returns the indices in target (rune positions) at

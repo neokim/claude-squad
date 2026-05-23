@@ -686,6 +686,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		}
 		m.state = stateSearch
 		m.search = &searchState{originalIdx: m.list.GetSelectedIdx()}
+		m.list.SetSearchQuery("")
 		return m, nil
 	case keys.KeyHelp:
 		return m.showHelpScreen(helpTypeGeneral{}, nil)
@@ -1181,10 +1182,12 @@ func (m *home) handleSearchState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.Type {
 	case tea.KeyEsc:
 		m.list.SetSelectedInstance(m.search.originalIdx)
+		m.list.SetSearchQuery("")
 		m.search = nil
 		m.state = stateDefault
 		return m, m.instanceChanged()
 	case tea.KeyEnter:
+		m.list.SetSearchQuery("")
 		m.search = nil
 		m.state = stateDefault
 		return m, m.instanceChanged()
@@ -1210,6 +1213,7 @@ func (m *home) handleSearchState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	if msg.String() == "ctrl+c" {
 		m.list.SetSelectedInstance(m.search.originalIdx)
+		m.list.SetSearchQuery("")
 		m.search = nil
 		m.state = stateDefault
 		return m, m.instanceChanged()
@@ -1229,7 +1233,9 @@ func (m *home) handleSearchState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // refreshSearchMatches recomputes matches for the current query and jumps the
 // list cursor to the first match. If there are no matches, the cursor stays put.
+// Also propagates the query to the list so the renderer can highlight matches.
 func (m *home) refreshSearchMatches() {
+	m.list.SetSearchQuery(m.search.query)
 	m.search.matches = m.list.Search(m.search.query)
 	m.search.matchCursor = 0
 	if len(m.search.matches) > 0 {

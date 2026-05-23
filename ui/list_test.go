@@ -79,7 +79,7 @@ func visibleItemCount(l *List) int {
 func renderItems(l *List) []listRenderedItem {
 	rendered := make([]listRenderedItem, len(l.items))
 	for i, item := range l.items {
-		text := l.renderer.Render(item, i+1, i == l.selectedIdx, len(l.repos) > 1)
+		text := l.renderer.Render(item, i+1, i == l.selectedIdx, len(l.repos) > 1, l.searchQuery)
 		lineCount := len(splitLines(text))
 		rendered[i] = listRenderedItem{text: text, lines: lineCount}
 	}

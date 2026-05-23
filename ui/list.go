@@ -5,6 +5,7 @@ import (
 	"claude-squad/session"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/spinner"
@@ -667,23 +668,72 @@ func highlightTitle(prefix, titleText, searchQuery string, selected bool) string
 	return sb.String()
 }
 
-// subsequenceMatchPositions returns the indices in target (rune positions) at
-// which the runes of query were matched in order. Returns nil if no match.
-// Both inputs are expected to be lower-cased already.
+// subsequenceMatchPositions returns the union of rune positions in target at
+// which every whitespace-separated token of query matched as a subsequence
+// (each token matched independently against the full target, fzf-style AND).
+// Returns nil if any token fails to match. Both inputs must be lower-cased.
 func subsequenceMatchPositions(query, target []rune) []int {
 	if len(query) == 0 {
 		return nil
 	}
-	positions := make([]int, 0, len(query))
+	tokens := splitTokens(query)
+	if len(tokens) == 0 {
+		return nil
+	}
+	seen := make(map[int]struct{})
+	for _, tok := range tokens {
+		pos := matchTokenPositions(tok, target)
+		if pos == nil {
+			return nil
+		}
+		for _, p := range pos {
+			seen[p] = struct{}{}
+		}
+	}
+	positions := make([]int, 0, len(seen))
+	for p := range seen {
+		positions = append(positions, p)
+	}
+	sort.Ints(positions)
+	return positions
+}
+
+// matchTokenPositions returns the indices in target where token's runes appear
+// in order (subsequence). Returns nil if any rune is missing.
+func matchTokenPositions(token, target []rune) []int {
+	if len(token) == 0 {
+		return nil
+	}
+	positions := make([]int, 0, len(token))
 	j := 0
-	for i := 0; i < len(target) && j < len(query); i++ {
-		if target[i] == query[j] {
+	for i := 0; i < len(target) && j < len(token); i++ {
+		if target[i] == token[j] {
 			positions = append(positions, i)
 			j++
 		}
 	}
-	if j != len(query) {
+	if j != len(token) {
 		return nil
 	}
 	return positions
+}
+
+// splitTokens splits query on whitespace runs, dropping empties.
+func splitTokens(query []rune) [][]rune {
+	var tokens [][]rune
+	start := -1
+	for i, r := range query {
+		if r == ' ' {
+			if start >= 0 {
+				tokens = append(tokens, query[start:i])
+				start = -1
+			}
+		} else if start < 0 {
+			start = i
+		}
+	}
+	if start >= 0 {
+		tokens = append(tokens, query[start:])
+	}
+	return tokens
 }

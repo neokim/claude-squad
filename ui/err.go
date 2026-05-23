@@ -34,6 +34,12 @@ func (e *ErrBox) SetSize(width, height int) {
 	e.height = height
 }
 
+// Width returns the configured width of the box. Used by callers that want to
+// render a same-width status line in place of the error.
+func (e *ErrBox) Width() int {
+	return e.width
+}
+
 func (e *ErrBox) String() string {
 	var err string
 	if e.err != nil {

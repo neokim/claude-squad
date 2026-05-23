@@ -45,7 +45,17 @@ const (
 	stateConfirm
 	// stateRename is the state when the user is renaming a paused instance.
 	stateRename
+	// stateSearch is the state when the user is searching instances by title.
+	stateSearch
 )
+
+// searchState holds the in-progress search query and match navigation.
+type searchState struct {
+	query       string
+	matches     []int
+	matchCursor int
+	originalIdx int
+}
 
 type home struct {
 	ctx context.Context
@@ -100,6 +110,8 @@ type home struct {
 	textOverlay *overlay.TextOverlay
 	// confirmationOverlay displays confirmation modals
 	confirmationOverlay *overlay.ConfirmationOverlay
+	// search holds the in-progress search query when state == stateSearch.
+	search *searchState
 
 	// contentHeight caps the height of list/tabbedWindow output in View() so
 	// any component that overflows its SetSize height can't push the layout
@@ -365,7 +377,7 @@ func (m *home) handleMenuHighlighting(msg tea.KeyMsg) (cmd tea.Cmd, returnEarly 
 		m.keySent = false
 		return nil, false
 	}
-	if m.state == statePrompt || m.state == stateHelp || m.state == stateConfirm || m.state == stateRename {
+	if m.state == statePrompt || m.state == stateHelp || m.state == stateConfirm || m.state == stateRename || m.state == stateSearch {
 		return nil, false
 	}
 	// If it's in the global keymap, we should try to highlight it.
@@ -632,6 +644,10 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m, nil
 	}
 
+	if m.state == stateSearch {
+		return m.handleSearchState(msg)
+	}
+
 	// Exit scrolling mode when ESC is pressed and preview pane is in scrolling mode
 	// Check if Escape key was pressed and we're not in the diff tab (meaning we're in preview tab)
 	// Always check for escape key first to ensure it doesn't get intercepted elsewhere
@@ -664,6 +680,13 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 	}
 
 	switch name {
+	case keys.KeySearch:
+		if m.list.NumInstances() == 0 {
+			return m, nil
+		}
+		m.state = stateSearch
+		m.search = &searchState{originalIdx: m.list.GetSelectedIdx()}
+		return m, nil
 	case keys.KeyHelp:
 		return m.showHelpScreen(helpTypeGeneral{}, nil)
 	case keys.KeyPrompt:
@@ -1142,6 +1165,89 @@ func (m *home) cancelPromptOverlay() tea.Cmd {
 	)
 }
 
+// handleSearchState processes keys while the search input is active.
+// Behavior:
+//   - printable runes append to the query, matches recompute, cursor jumps to the first match.
+//   - Backspace pops the last rune from the query.
+//   - Down/Tab → next match (wraps). Up/Shift+Tab → previous match (wraps).
+//   - Enter → commit current position, exit search.
+//   - Esc / Ctrl+C → cancel, revert cursor to position before search began.
+func (m *home) handleSearchState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.search == nil {
+		m.state = stateDefault
+		return m, nil
+	}
+
+	switch msg.Type {
+	case tea.KeyEsc:
+		m.list.SetSelectedInstance(m.search.originalIdx)
+		m.search = nil
+		m.state = stateDefault
+		return m, m.instanceChanged()
+	case tea.KeyEnter:
+		m.search = nil
+		m.state = stateDefault
+		return m, m.instanceChanged()
+	case tea.KeyBackspace:
+		runes := []rune(m.search.query)
+		if len(runes) == 0 {
+			return m, nil
+		}
+		m.search.query = string(runes[:len(runes)-1])
+		m.refreshSearchMatches()
+		return m, m.instanceChanged()
+	case tea.KeyTab, tea.KeyDown:
+		m.advanceSearchMatch(1)
+		return m, m.instanceChanged()
+	case tea.KeyShiftTab, tea.KeyUp:
+		m.advanceSearchMatch(-1)
+		return m, m.instanceChanged()
+	case tea.KeySpace:
+		m.search.query += " "
+		m.refreshSearchMatches()
+		return m, m.instanceChanged()
+	}
+
+	if msg.String() == "ctrl+c" {
+		m.list.SetSelectedInstance(m.search.originalIdx)
+		m.search = nil
+		m.state = stateDefault
+		return m, m.instanceChanged()
+	}
+
+	if msg.Type == tea.KeyRunes {
+		// All printable runes are treated as query input. Match navigation is
+		// bound to arrow keys / Tab only — otherwise common search terms
+		// containing 'n' couldn't be typed.
+		m.search.query += string(msg.Runes)
+		m.refreshSearchMatches()
+		return m, m.instanceChanged()
+	}
+
+	return m, nil
+}
+
+// refreshSearchMatches recomputes matches for the current query and jumps the
+// list cursor to the first match. If there are no matches, the cursor stays put.
+func (m *home) refreshSearchMatches() {
+	m.search.matches = m.list.Search(m.search.query)
+	m.search.matchCursor = 0
+	if len(m.search.matches) > 0 {
+		m.list.SetSelectedInstance(m.search.matches[0])
+	}
+}
+
+// advanceSearchMatch moves the match cursor by delta (positive = next, negative
+// = previous), wrapping around, and selects the matching instance.
+func (m *home) advanceSearchMatch(delta int) {
+	if len(m.search.matches) == 0 {
+		return
+	}
+	n := len(m.search.matches)
+	m.search.matchCursor = ((m.search.matchCursor+delta)%n + n) % n
+	m.list.SetSelectedInstance(m.search.matches[m.search.matchCursor])
+}
+
 // confirmAction shows a confirmation modal and stores the action to execute on confirm
 func (m *home) confirmAction(message string, action tea.Cmd) tea.Cmd {
 	m.state = stateConfirm
@@ -1167,6 +1273,29 @@ func (m *home) confirmAction(message string, action tea.Cmd) tea.Cmd {
 	return nil
 }
 
+// renderSearchPrompt renders the vi-style search status line shown in place of
+// the error box while stateSearch is active. Format: "/query  [3/12]" or
+// "/query  no match".
+func (m *home) renderSearchPrompt() string {
+	prompt := "/" + m.search.query
+	var suffix string
+	if m.search.query == "" {
+		suffix = ""
+	} else if len(m.search.matches) == 0 {
+		suffix = "  no match"
+	} else {
+		suffix = fmt.Sprintf("  [%d/%d]", m.search.matchCursor+1, len(m.search.matches))
+	}
+	line := searchPromptStyle.Render(prompt) + searchHintStyle.Render(suffix)
+	return lipgloss.NewStyle().Width(m.errBox.Width()).Render(line)
+}
+
+var searchPromptStyle = lipgloss.NewStyle().
+	Foreground(lipgloss.AdaptiveColor{Light: "#1a1a1a", Dark: "#dddddd"})
+
+var searchHintStyle = lipgloss.NewStyle().
+	Foreground(lipgloss.AdaptiveColor{Light: "#7A7474", Dark: "#9C9494"})
+
 // clipHeight returns at most maxLines lines from s. Used as a defensive cap
 // so a misbehaving component can't push the layout past the terminal height.
 func clipHeight(s string, maxLines int) string {
@@ -1185,11 +1314,16 @@ func (m *home) View() string {
 	previewWithPadding := lipgloss.NewStyle().PaddingTop(1).Render(clipHeight(m.tabbedWindow.String(), m.contentHeight))
 	listAndPreview := lipgloss.JoinHorizontal(lipgloss.Top, listWithPadding, previewWithPadding)
 
+	bottomLine := m.errBox.String()
+	if m.state == stateSearch && m.search != nil {
+		bottomLine = m.renderSearchPrompt()
+	}
+
 	mainView := lipgloss.JoinVertical(
 		lipgloss.Left,
 		listAndPreview,
 		m.menu.String(),
-		m.errBox.String(),
+		bottomLine,
 	)
 
 	if m.state == statePrompt || m.state == stateRename {

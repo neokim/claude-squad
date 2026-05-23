@@ -35,6 +35,9 @@ const (
 	// Reorder keybindings
 	KeyMoveUp
 	KeyMoveDown
+
+	// Search
+	KeySearch
 )
 
 // GlobalKeyStringsMap is a global, immutable map string to keybinding.
@@ -61,6 +64,7 @@ var GlobalKeyStringsMap = map[string]KeyName{
 	"?":          KeyHelp,
 	"A":          KeyAttachExternal,
 	"S":          KeyRestartInstance,
+	"/":          KeySearch,
 
 	// Korean 두벌식 자모. Shift 변형이 없는 자모는 일반 키 동작만 매핑 (Shift 동작은 한글 모드에서 포기).
 	"ㅂ": KeyQuit,
@@ -155,6 +159,10 @@ var GlobalkeyBindings = map[KeyName]key.Binding{
 	KeyRestartInstance: key.NewBinding(
 		key.WithKeys("S"),
 		key.WithHelp("S", "restart"),
+	),
+	KeySearch: key.NewBinding(
+		key.WithKeys("/"),
+		key.WithHelp("/", "search"),
 	),
 
 	// -- Special keybindings --

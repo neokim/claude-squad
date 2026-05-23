@@ -123,7 +123,7 @@ func (m *Menu) updateOptions() {
 			// When there is no instance, show the empty state
 			m.setGroups([][]keys.KeyName{
 				{keys.KeyNew, keys.KeyPrompt},
-				{keys.KeyHelp, keys.KeyQuit},
+				{keys.KeySearch, keys.KeyHelp, keys.KeyQuit},
 			}, map[int]bool{0: true})
 		}
 	case StateNewInstance:
@@ -189,7 +189,7 @@ func (m *Menu) addInstanceOptions() {
 	}
 
 	// System group
-	systemGroup := []keys.KeyName{keys.KeyTab, keys.KeyHelp, keys.KeyQuit}
+	systemGroup := []keys.KeyName{keys.KeyTab, keys.KeySearch, keys.KeyHelp, keys.KeyQuit}
 
 	m.setGroups(
 		[][]keys.KeyName{mgmtGroup, actionGroup, systemGroup},

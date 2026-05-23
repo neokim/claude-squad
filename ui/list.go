@@ -531,3 +531,46 @@ func (l *List) MoveDown() bool {
 func (l *List) GetInstances() []*session.Instance {
 	return l.items
 }
+
+// GetSelectedIdx returns the currently selected index.
+func (l *List) GetSelectedIdx() int {
+	return l.selectedIdx
+}
+
+// Search returns the indices of instances whose Title fuzzy-matches the query.
+// Matching is case-insensitive and uses subsequence matching, so "aut" matches
+// "authentication". An empty query returns no matches.
+func (l *List) Search(query string) []int {
+	if query == "" {
+		return nil
+	}
+	q := []rune(strings.ToLower(query))
+	var matches []int
+	for i, item := range l.items {
+		if subsequenceMatchPositions(q, []rune(strings.ToLower(item.Title))) != nil {
+			matches = append(matches, i)
+		}
+	}
+	return matches
+}
+
+// subsequenceMatchPositions returns the indices in target (rune positions) at
+// which the runes of query were matched in order. Returns nil if no match.
+// Both inputs are expected to be lower-cased already.
+func subsequenceMatchPositions(query, target []rune) []int {
+	if len(query) == 0 {
+		return nil
+	}
+	positions := make([]int, 0, len(query))
+	j := 0
+	for i := 0; i < len(target) && j < len(query); i++ {
+		if target[i] == query[j] {
+			positions = append(positions, i)
+			j++
+		}
+	}
+	if j != len(query) {
+		return nil
+	}
+	return positions
+}

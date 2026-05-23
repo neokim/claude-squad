@@ -112,6 +112,9 @@ type home struct {
 	confirmationOverlay *overlay.ConfirmationOverlay
 	// search holds the in-progress search query when state == stateSearch.
 	search *searchState
+	// lastSearchQuery is the most recently used query, stashed across search
+	// sessions so re-entering with `/` restores the previous query.
+	lastSearchQuery string
 
 	// contentHeight caps the height of list/tabbedWindow output in View() so
 	// any component that overflows its SetSize height can't push the layout
@@ -685,7 +688,14 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 			return m, nil
 		}
 		m.state = stateSearch
-		m.search = &searchState{originalIdx: m.list.GetSelectedIdx()}
+		m.search = &searchState{
+			query:       m.lastSearchQuery,
+			originalIdx: m.list.GetSelectedIdx(),
+		}
+		if m.search.query != "" {
+			m.refreshSearchMatches()
+			return m, m.instanceChanged()
+		}
 		m.list.SetSearchQuery("")
 		return m, nil
 	case keys.KeyHelp:
@@ -1181,12 +1191,9 @@ func (m *home) handleSearchState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch msg.Type {
 	case tea.KeyEsc:
-		m.list.SetSelectedInstance(m.search.originalIdx)
-		m.list.SetSearchQuery("")
-		m.search = nil
-		m.state = stateDefault
-		return m, m.instanceChanged()
+		return m, m.cancelSearch()
 	case tea.KeyEnter:
+		m.lastSearchQuery = m.search.query
 		m.list.SetSearchQuery("")
 		m.search = nil
 		m.state = stateDefault
@@ -1194,9 +1201,31 @@ func (m *home) handleSearchState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyBackspace:
 		runes := []rune(m.search.query)
 		if len(runes) == 0 {
+			// Backspace on an empty query exits search mode (vi-style).
+			return m, m.cancelSearch()
+		}
+		if msg.Alt {
+			// Alt+Backspace: delete last word.
+			i := len(runes) - 1
+			for i >= 0 && runes[i] == ' ' {
+				i--
+			}
+			for i >= 0 && runes[i] != ' ' {
+				i--
+			}
+			m.search.query = string(runes[:i+1])
+		} else {
+			m.search.query = string(runes[:len(runes)-1])
+		}
+		m.refreshSearchMatches()
+		return m, m.instanceChanged()
+	case tea.KeyCtrlU:
+		// Clear the entire query. macOS terminals deliver Cmd+Backspace as
+		// nothing useful in raw mode, so Ctrl+U is the portable "clear line".
+		if m.search.query == "" {
 			return m, nil
 		}
-		m.search.query = string(runes[:len(runes)-1])
+		m.search.query = ""
 		m.refreshSearchMatches()
 		return m, m.instanceChanged()
 	case tea.KeyTab, tea.KeyDown:
@@ -1212,11 +1241,7 @@ func (m *home) handleSearchState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	if msg.String() == "ctrl+c" {
-		m.list.SetSelectedInstance(m.search.originalIdx)
-		m.list.SetSearchQuery("")
-		m.search = nil
-		m.state = stateDefault
-		return m, m.instanceChanged()
+		return m, m.cancelSearch()
 	}
 
 	if msg.Type == tea.KeyRunes {
@@ -1229,6 +1254,18 @@ func (m *home) handleSearchState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, nil
+}
+
+// cancelSearch exits search mode, restores the cursor to where it was before
+// the user started searching, and stashes the query so re-entering with `/`
+// restores it.
+func (m *home) cancelSearch() tea.Cmd {
+	m.lastSearchQuery = m.search.query
+	m.list.SetSelectedInstance(m.search.originalIdx)
+	m.list.SetSearchQuery("")
+	m.search = nil
+	m.state = stateDefault
+	return m.instanceChanged()
 }
 
 // refreshSearchMatches recomputes matches for the current query and jumps the

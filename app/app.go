@@ -54,7 +54,6 @@ type searchState struct {
 	query       string
 	matches     []int
 	matchCursor int
-	originalIdx int
 }
 
 type home struct {
@@ -688,10 +687,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 			return m, nil
 		}
 		m.state = stateSearch
-		m.search = &searchState{
-			query:       m.lastSearchQuery,
-			originalIdx: m.list.GetSelectedIdx(),
-		}
+		m.search = &searchState{query: m.lastSearchQuery}
 		if m.search.query != "" {
 			m.refreshSearchMatches()
 			return m, m.instanceChanged()
@@ -1181,8 +1177,7 @@ func (m *home) cancelPromptOverlay() tea.Cmd {
 //   - printable runes append to the query, matches recompute, cursor jumps to the first match.
 //   - Backspace pops the last rune from the query.
 //   - Down/Tab → next match (wraps). Up/Shift+Tab → previous match (wraps).
-//   - Enter → commit current position, exit search.
-//   - Esc / Ctrl+C → cancel, revert cursor to position before search began.
+//   - Enter / Esc / Ctrl+C → exit search, keep the cursor on the current match.
 func (m *home) handleSearchState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.search == nil {
 		m.state = stateDefault
@@ -1190,14 +1185,8 @@ func (m *home) handleSearchState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	switch msg.Type {
-	case tea.KeyEsc:
+	case tea.KeyEsc, tea.KeyEnter:
 		return m, m.cancelSearch()
-	case tea.KeyEnter:
-		m.lastSearchQuery = m.search.query
-		m.list.SetSearchQuery("")
-		m.search = nil
-		m.state = stateDefault
-		return m, m.instanceChanged()
 	case tea.KeyBackspace:
 		runes := []rune(m.search.query)
 		if len(runes) == 0 {
@@ -1256,12 +1245,11 @@ func (m *home) handleSearchState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// cancelSearch exits search mode, restores the cursor to where it was before
-// the user started searching, and stashes the query so re-entering with `/`
-// restores it.
+// cancelSearch exits search mode and stashes the query so re-entering with
+// `/` restores it. The list cursor stays on whatever match the user landed on
+// — exit keys (Esc/Enter/Ctrl+C/empty-Backspace) don't revert the selection.
 func (m *home) cancelSearch() tea.Cmd {
 	m.lastSearchQuery = m.search.query
-	m.list.SetSelectedInstance(m.search.originalIdx)
 	m.list.SetSearchQuery("")
 	m.search = nil
 	m.state = stateDefault

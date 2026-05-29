@@ -178,7 +178,13 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool, h
 		spin := r.spinner.View()
 		trailing := " "
 		if selected {
-			spin = lipgloss.NewStyle().Background(selBg).Render(spin)
+			// The spinner is rendered with no foreground (terminal default),
+			// which on a dark terminal is a light color — invisible on the
+			// light selection background. Force a dark foreground here.
+			spin = lipgloss.NewStyle().
+				Background(selBg).
+				Foreground(lipgloss.Color("#1a1a1a")).
+				Render(spin)
 			trailing = selectedInnerStyle.Render(trailing)
 		}
 		join = spin + trailing

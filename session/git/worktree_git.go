@@ -56,8 +56,17 @@ func SearchBranches(repoPath, filter string) ([]string, error) {
 
 // runGitCommand executes a git command and returns any error
 func (g *GitWorktree) runGitCommand(path string, args ...string) (string, error) {
+	return g.runGitCommandEnv(path, nil, args...)
+}
+
+// runGitCommandEnv is like runGitCommand but appends extraEnv (e.g. GIT_INDEX_FILE)
+// to the process environment.
+func (g *GitWorktree) runGitCommandEnv(path string, extraEnv []string, args ...string) (string, error) {
 	baseArgs := []string{"-C", path}
 	cmd := exec.Command("git", append(baseArgs, args...)...)
+	if len(extraEnv) > 0 {
+		cmd.Env = append(os.Environ(), extraEnv...)
+	}
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -65,6 +74,53 @@ func (g *GitWorktree) runGitCommand(path string, args ...string) (string, error)
 	}
 
 	return string(output), nil
+}
+
+// intentToAddEnv creates a throwaway git index seeded from the worktree's real
+// index and stages untracked files into it with intent-to-add. This lets
+// `git diff` include untracked files in its output without mutating the real
+// .git index (which would prematurely stage deletions and leave new files as
+// content-less intent-to-add entries, corrupting later `git add`/commit flows).
+//
+// It returns the env slice (GIT_INDEX_FILE=...) to pass to runGitCommandEnv and
+// a cleanup func that removes the temporary index. cleanup is always safe to
+// call, even on error.
+func (g *GitWorktree) intentToAddEnv() (env []string, cleanup func(), err error) {
+	cleanup = func() {}
+
+	// Locate the real index file (linked worktrees keep their own index under
+	// .git/worktrees/<id>/index).
+	idxOut, err := g.runGitCommand(g.worktreePath, "rev-parse", "--git-path", "index")
+	if err != nil {
+		return nil, cleanup, err
+	}
+	realIdx := strings.TrimSpace(idxOut)
+	if !filepath.IsAbs(realIdx) {
+		realIdx = filepath.Join(g.worktreePath, realIdx)
+	}
+
+	tmp, err := os.CreateTemp("", "claude-squad-index-*")
+	if err != nil {
+		return nil, cleanup, err
+	}
+	tmpPath := tmp.Name()
+	_ = tmp.Close()
+	cleanup = func() { _ = os.Remove(tmpPath) }
+
+	// Seed the temp index from the real one so tracked files are recognized.
+	// A brand-new worktree may not have an index yet; an empty temp index is
+	// fine in that case.
+	if data, rerr := os.ReadFile(realIdx); rerr == nil {
+		if werr := os.WriteFile(tmpPath, data, 0o600); werr != nil {
+			return nil, cleanup, werr
+		}
+	}
+
+	env = []string{"GIT_INDEX_FILE=" + tmpPath}
+	if _, aerr := g.runGitCommandEnv(g.worktreePath, env, "add", "-N", "."); aerr != nil {
+		return nil, cleanup, aerr
+	}
+	return env, cleanup, nil
 }
 
 // PushChanges commits and pushes changes in the worktree to the remote branch

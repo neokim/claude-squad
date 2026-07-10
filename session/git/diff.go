@@ -26,14 +26,16 @@ func (d *DiffStats) IsEmpty() bool {
 func (g *GitWorktree) Diff() *DiffStats {
 	stats := &DiffStats{}
 
-	// -N stages untracked files (intent to add), including them in the diff
-	_, err := g.runGitCommand(g.worktreePath, "add", "-N", ".")
+	// Include untracked files in the diff via intent-to-add, but do so in an
+	// isolated temporary index so the real .git index is never mutated.
+	env, cleanup, err := g.intentToAddEnv()
+	defer cleanup()
 	if err != nil {
 		stats.Error = err
 		return stats
 	}
 
-	content, err := g.runGitCommand(g.worktreePath, "--no-pager", "diff", g.GetBaseCommitSHA())
+	content, err := g.runGitCommandEnv(g.worktreePath, env, "--no-pager", "diff", g.GetBaseCommitSHA())
 	if err != nil {
 		stats.Error = err
 		return stats
@@ -57,14 +59,16 @@ func (g *GitWorktree) Diff() *DiffStats {
 func (g *GitWorktree) DiffNumstat() *DiffStats {
 	stats := &DiffStats{}
 
-	// -N stages untracked files (intent to add), including them in the diff
-	_, err := g.runGitCommand(g.worktreePath, "add", "-N", ".")
+	// Include untracked files in the diff via intent-to-add, but do so in an
+	// isolated temporary index so the real .git index is never mutated.
+	env, cleanup, err := g.intentToAddEnv()
+	defer cleanup()
 	if err != nil {
 		stats.Error = err
 		return stats
 	}
 
-	out, err := g.runGitCommand(g.worktreePath, "--no-pager", "diff", "--numstat", g.GetBaseCommitSHA())
+	out, err := g.runGitCommandEnv(g.worktreePath, env, "--no-pager", "diff", "--numstat", g.GetBaseCommitSHA())
 	if err != nil {
 		stats.Error = err
 		return stats

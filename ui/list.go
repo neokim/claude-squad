@@ -127,7 +127,7 @@ func (l *List) SetSize(width, height int) {
 // width and height.
 func (l *List) SetSessionPreviewSize(width, height int) (err error) {
 	for i, item := range l.items {
-		if !item.Started() || item.Paused() {
+		if !item.Started() || item.Inactive() {
 			continue
 		}
 
@@ -566,7 +566,7 @@ func (l *List) rmRepo(repo string) {
 // When creating a new one and entering the name, you want to call the finalizer once the name is done.
 func (l *List) AddInstance(instance *session.Instance) (finalize func()) {
 	idx := len(l.items)
-	if !instance.Paused() {
+	if !instance.Inactive() {
 		idx = groupBoundary(l.items)
 	}
 	l.insertAt(idx, instance)
@@ -650,7 +650,7 @@ func (l *List) MoveDown() bool {
 // active group (top) and the paused group (bottom).
 func groupBoundary(items []*session.Instance) int {
 	for i, inst := range items {
-		if inst.Paused() {
+		if inst.Inactive() {
 			return i
 		}
 	}

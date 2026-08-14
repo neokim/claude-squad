@@ -149,7 +149,7 @@ func FromInstanceData(data InstanceData) (*Instance, error) {
 		},
 	}
 
-	if instance.Paused() {
+	if instance.Inactive() {
 		instance.started = true
 		instance.tmuxSession = tmux.NewTmuxSession(instance.Title, instance.Program)
 	} else {
@@ -337,7 +337,7 @@ func (i *Instance) combineErrors(errs []error) error {
 // true, normal Pause operations like dirty-check or `git worktree remove`
 // will fail and the worktree dir must be cleaned up directly.
 func (i *Instance) IsWorktreeOrphan() (bool, error) {
-	if !i.started || i.gitWorktree == nil || i.Paused() {
+	if !i.started || i.gitWorktree == nil || i.Inactive() {
 		return false, nil
 	}
 	valid, err := i.gitWorktree.IsValidWorktree()
@@ -348,7 +348,7 @@ func (i *Instance) IsWorktreeOrphan() (bool, error) {
 }
 
 func (i *Instance) Preview() (string, error) {
-	if !i.started || i.Paused() {
+	if !i.started || i.Inactive() {
 		return "", nil
 	}
 	return i.tmuxSession.CapturePaneContent()
@@ -468,7 +468,7 @@ func appleScriptQuote(s string) string {
 }
 
 func (i *Instance) SetPreviewSize(width, height int) error {
-	if !i.started || i.Paused() {
+	if !i.started || i.Inactive() {
 		return fmt.Errorf("cannot set preview size for instance that has not been started or " +
 			"is paused")
 	}
@@ -670,12 +670,11 @@ func (i *Instance) Rename(newTitle string) error {
 	return nil
 }
 
-// Paused reports whether the instance is inactive — no live worktree to diff
-// and no tmux pane to capture. This covers Pausing as well as Paused, since
-// callers use it to decide whether to touch the session at all. Use Pausing()
-// to distinguish the transient state, and check Status == Paused directly when
-// only a fully paused instance will do (e.g. Resume).
-func (i *Instance) Paused() bool {
+// Inactive reports whether the instance has no live worktree to diff and no
+// tmux pane to capture, which is true both once it is Paused and while it is
+// still Pausing. Callers use it to decide whether to touch the session at all;
+// compare Status directly when a specific one of the two is meant.
+func (i *Instance) Inactive() bool {
 	return i.Status == Paused || i.Status == Pausing
 }
 
@@ -696,10 +695,18 @@ func logStep(title, step string, start time.Time) {
 	log.InfoLog.Printf("pause[%s]: %s took %s", title, step, time.Since(start))
 }
 
-// Pause stops the tmux session and removes the worktree, preserving the branch.
-// The worktree directory is only renamed out of the way here; the actual delete
-// runs in the background, so Pause returns as soon as the session is safe to
-// resume no matter how large the worktree is.
+// Pause commits outstanding work, detaches the tmux session and tears the
+// worktree down, preserving the branch. The worktree directory is only renamed
+// out of the way here; the actual delete runs in the background, so Pause
+// returns as soon as the session is safe to resume no matter how large the
+// worktree is.
+//
+// It returns an error only when the session was left intact — i.e. the pause did
+// not happen. Failures after the worktree is gone are logged instead, because by
+// then the caller has no choice but to treat the session as paused.
+//
+// Pause deliberately does not touch Status. It runs on a background goroutine
+// (see pauseDoneMsg), and Status is owned by the update loop.
 func (i *Instance) Pause() error {
 	if !i.started {
 		return fmt.Errorf("cannot pause instance that has not been started")
@@ -711,43 +718,13 @@ func (i *Instance) Pause() error {
 	pauseStart := time.Now()
 	defer func() { logStep(i.Title, "total", pauseStart) }()
 
-	copyInstanceName := config.LoadConfig().ShouldCopyInstanceNameOnCheckout()
-
-	var errs []error
-
-	// If the worktree is orphaned (path or .git missing), git cannot operate
-	// on it. Skip dirty check and Remove, prune any lingering metadata, then
-	// transition to Paused so the user can recover via Resume.
-	if valid, err := i.gitWorktree.IsValidWorktree(); err != nil {
-		errs = append(errs, fmt.Errorf("failed to validate worktree: %w", err))
-		log.ErrorLog.Print(err)
+	// If the worktree is orphaned (path or .git missing), git cannot operate on
+	// it, so the dirty check and teardown have to be skipped.
+	valid, err := i.gitWorktree.IsValidWorktree()
+	if err != nil {
+		log.ErrorLog.Printf("failed to validate worktree for %s: %v", i.Title, err)
 	} else if !valid {
-		log.WarningLog.Printf("worktree at %s is orphaned; skipping dirty check and remove",
-			i.gitWorktree.GetWorktreePath())
-		if err := i.tmuxSession.DetachSafely(); err != nil {
-			errs = append(errs, fmt.Errorf("failed to detach tmux session: %w", err))
-			log.ErrorLog.Print(err)
-		}
-		// Drop any leftover directory so a future Resume's `git worktree add` won't conflict.
-		// Rename it aside and delete in the background — an orphaned worktree can be
-		// just as large as a live one.
-		if _, statErr := os.Stat(i.gitWorktree.GetWorktreePath()); statErr == nil {
-			if trashPath, err := git.MovePathToTrash(i.gitWorktree.GetWorktreePath()); err != nil {
-				errs = append(errs, fmt.Errorf("failed to remove orphaned worktree directory: %w", err))
-				log.ErrorLog.Print(err)
-			} else {
-				go git.DeleteTrashPath(trashPath)
-			}
-		}
-		if err := i.gitWorktree.Prune(); err != nil {
-			errs = append(errs, fmt.Errorf("failed to prune git worktrees: %w", err))
-			log.ErrorLog.Print(err)
-		}
-		i.SetStatus(Paused)
-		if copyInstanceName {
-			_ = clipboard.WriteAll(i.gitWorktree.GetBranchName())
-		}
-		return i.combineErrors(errs)
+		return i.pauseOrphaned()
 	}
 
 	// Check if there are any changes to commit
@@ -755,8 +732,7 @@ func (i *Instance) Pause() error {
 	dirty, err := i.gitWorktree.IsDirty()
 	logStep(i.Title, "dirty check", dirtyStart)
 	if err != nil {
-		errs = append(errs, fmt.Errorf("failed to check if worktree is dirty: %w", err))
-		log.ErrorLog.Print(err)
+		log.ErrorLog.Printf("failed to check if worktree for %s is dirty: %v", i.Title, err)
 	} else if dirty {
 		// Commit changes locally (without pushing to GitHub)
 		commitStart := time.Now()
@@ -764,19 +740,16 @@ func (i *Instance) Pause() error {
 		err := i.gitWorktree.CommitChanges(commitMsg)
 		logStep(i.Title, "commit", commitStart)
 		if err != nil {
-			errs = append(errs, fmt.Errorf("failed to commit changes: %w", err))
-			log.ErrorLog.Print(err)
-			// Return early if we can't commit changes to avoid corrupted state
-			return i.combineErrors(errs)
+			// Bail out before touching the worktree so the work isn't lost.
+			return fmt.Errorf("failed to commit changes: %w", err)
 		}
 	}
 
 	// Detach from tmux session instead of closing to preserve session output
 	detachStart := time.Now()
 	if err := i.tmuxSession.DetachSafely(); err != nil {
-		errs = append(errs, fmt.Errorf("failed to detach tmux session: %w", err))
-		log.ErrorLog.Print(err)
-		// Continue with pause process even if detach fails
+		// Not fatal: the pause carries on, the tmux session is just left attached.
+		log.ErrorLog.Printf("failed to detach tmux session for %s: %v", i.Title, err)
 	}
 	logStep(i.Title, "tmux detach", detachStart)
 
@@ -786,28 +759,50 @@ func (i *Instance) Pause() error {
 		// afterwards in the background: a large worktree takes tens of seconds to
 		// unlink and the session is already resumable once the rename lands.
 		trashStart := time.Now()
-		trashPath, err := i.gitWorktree.MoveToTrash()
+		err := i.gitWorktree.MoveToTrash()
 		logStep(i.Title, "worktree teardown", trashStart)
-		if trashPath != "" {
-			go git.DeleteTrashPath(trashPath)
-		}
 		if err != nil {
-			errs = append(errs, fmt.Errorf("failed to remove git worktree: %w", err))
-			log.ErrorLog.Print(err)
-			return i.combineErrors(errs)
+			return fmt.Errorf("failed to remove git worktree: %w", err)
 		}
 	}
 
-	i.SetStatus(Paused)
-	if copyInstanceName {
+	i.copyBranchNameOnCheckout()
+	return nil
+}
+
+// pauseOrphaned handles a worktree git can no longer operate on: drop whatever
+// is left on disk and prune the dangling metadata so a later Resume can rebuild
+// it. Nothing here is worth failing the pause over — the session is unusable as
+// it stands, and staying active would only strand it further.
+func (i *Instance) pauseOrphaned() error {
+	worktreePath := i.gitWorktree.GetWorktreePath()
+	log.WarningLog.Printf("worktree at %s is orphaned; skipping dirty check and remove", worktreePath)
+
+	if err := i.tmuxSession.DetachSafely(); err != nil {
+		log.ErrorLog.Printf("failed to detach tmux session for %s: %v", i.Title, err)
+	}
+	// Drop any leftover directory so a future Resume's `git worktree add` won't
+	// conflict. An orphaned worktree can be just as large as a live one, so it
+	// goes through the trash too.
+	if _, err := os.Stat(worktreePath); err == nil {
+		if err := git.TrashDir(worktreePath); err != nil {
+			log.ErrorLog.Printf("failed to remove orphaned worktree directory %s: %v", worktreePath, err)
+		}
+	}
+	if err := i.gitWorktree.Prune(); err != nil {
+		log.ErrorLog.Printf("failed to prune git worktrees for %s: %v", i.Title, err)
+	}
+
+	i.copyBranchNameOnCheckout()
+	return nil
+}
+
+// copyBranchNameOnCheckout puts the session's branch on the clipboard so the
+// user can check it out elsewhere, if they asked for that.
+func (i *Instance) copyBranchNameOnCheckout() {
+	if config.LoadConfig().ShouldCopyInstanceNameOnCheckout() {
 		_ = clipboard.WriteAll(i.gitWorktree.GetBranchName())
 	}
-
-	if err := i.combineErrors(errs); err != nil {
-		log.ErrorLog.Print(err)
-		return err
-	}
-	return nil
 }
 
 // Resume recreates the worktree and restarts the tmux session
@@ -879,13 +874,16 @@ func (i *Instance) RestartInstance() error {
 	if !i.started {
 		return fmt.Errorf("cannot restart: instance has not been started yet")
 	}
-	if i.Paused() {
+	if i.Inactive() {
 		return fmt.Errorf("cannot restart: instance is paused (resume it first with 'r')")
 	}
 
 	if err := i.Pause(); err != nil {
 		return fmt.Errorf("failed to pause during restart: %w", err)
 	}
+	// Pause leaves Status alone for the async caller's benefit; Resume below
+	// requires a paused instance.
+	i.SetStatus(Paused)
 
 	// Pause leaves tmux detached but alive. Close it now so Resume spawns a
 	// fresh tmux + claude rather than reattaching to the old one.
@@ -906,7 +904,7 @@ func (i *Instance) UpdateDiffStats() error {
 		return nil
 	}
 
-	if i.Paused() {
+	if i.Inactive() {
 		// Keep the previous diff stats if the instance is paused
 		return nil
 	}
@@ -928,7 +926,7 @@ func (i *Instance) UpdateDiffStats() error {
 // ComputeDiff runs the expensive git diff I/O and returns the result without
 // mutating instance state. Safe to call from a background goroutine.
 func (i *Instance) ComputeDiff() *git.DiffStats {
-	if !i.started || i.Paused() {
+	if !i.started || i.Inactive() {
 		return nil
 	}
 	return i.gitWorktree.Diff()
@@ -939,7 +937,7 @@ func (i *Instance) ComputeDiff() *git.DiffStats {
 // background goroutine. Use this for instances whose full diff content is not
 // currently needed so we avoid keeping large diffs in memory.
 func (i *Instance) ComputeDiffNumstat() *git.DiffStats {
-	if !i.started || i.Paused() {
+	if !i.started || i.Inactive() {
 		return nil
 	}
 	return i.gitWorktree.DiffNumstat()
@@ -979,7 +977,7 @@ func (i *Instance) SendPrompt(prompt string) error {
 
 // PreviewFullHistory captures the entire tmux pane output including full scrollback history
 func (i *Instance) PreviewFullHistory() (string, error) {
-	if !i.started || i.Paused() {
+	if !i.started || i.Inactive() {
 		return "", nil
 	}
 	return i.tmuxSession.CapturePaneContentWithOptions("-", "-")
@@ -992,7 +990,7 @@ func (i *Instance) SetTmuxSession(session *tmux.TmuxSession) {
 
 // SendKeys sends keys to the tmux session
 func (i *Instance) SendKeys(keys string) error {
-	if !i.started || i.Paused() {
+	if !i.started || i.Inactive() {
 		return fmt.Errorf("cannot send keys to instance that has not been started or is paused")
 	}
 	return i.tmuxSession.SendKeys(keys)

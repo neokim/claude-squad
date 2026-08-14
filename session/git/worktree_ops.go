@@ -114,11 +114,7 @@ func (g *GitWorktree) Cleanup() error {
 	// still using. Like Pause, the contents are only renamed aside here and
 	// deleted in the background, so killing a large session is not a stall.
 	if _, err := os.Stat(g.worktreePath); err == nil {
-		trashPath, err := g.MoveToTrash()
-		if trashPath != "" {
-			go DeleteTrashPath(trashPath)
-		}
-		if err != nil {
+		if err := g.MoveToTrash(); err != nil {
 			errs = append(errs, err)
 		}
 	} else if !os.IsNotExist(err) {
@@ -163,36 +159,36 @@ func (g *GitWorktree) Remove() error {
 // trash dir — a constant-time rename, since trash/ sits on the same filesystem
 // as worktrees/ — and git's now-dangling metadata is pruned.
 //
-// The returned path still holds the full contents; the caller is responsible
-// for deleting it in the background (or leaving it for SweepTrash on the next
-// startup). Falls back to a plain Remove if the rename is not possible.
-func (g *GitWorktree) MoveToTrash() (string, error) {
-	trashPath, err := MovePathToTrash(g.worktreePath)
-	if err != nil {
+// Falls back to a plain Remove if the rename is not possible.
+func (g *GitWorktree) MoveToTrash() error {
+	if err := TrashDir(g.worktreePath); err != nil {
 		// Different filesystem, permissions, ... — fall back to the slow path
 		// rather than leaving the worktree in place.
 		log.WarningLog.Printf("could not move worktree %s to trash (%v); falling back to git worktree remove",
 			g.worktreePath, err)
-		if removeErr := g.Remove(); removeErr != nil {
-			return "", removeErr
+		if err := g.Remove(); err != nil {
+			return err
 		}
-		return "", g.Prune()
 	}
-
-	if err := g.Prune(); err != nil {
-		// The worktree directory is already gone, so the session is effectively
-		// paused; report the error but still hand back the trash path so the
-		// caller can free the disk space.
-		return trashPath, err
-	}
-	return trashPath, nil
+	return g.Prune()
 }
 
-// MovePathToTrash renames path into the trash directory and returns its new
+// TrashDir renames path aside and deletes it in the background, so the caller
+// only pays for the rename. This is the only way callers should discard a large
+// directory; anything left behind is reclaimed by SweepTrash on the next start.
+func TrashDir(path string) error {
+	trashPath, err := movePathToTrash(path)
+	if err != nil {
+		return err
+	}
+	go DeleteTrashPath(trashPath)
+	return nil
+}
+
+// movePathToTrash renames path into the trash directory and returns its new
 // location. The rename is constant-time regardless of how much the directory
-// holds, so callers can get out of the way of a slow delete and hand the
-// returned path to a background RemoveAll.
-func MovePathToTrash(path string) (string, error) {
+// holds.
+func movePathToTrash(path string) (string, error) {
 	trashDir, err := config.GetTrashDir()
 	if err != nil {
 		return "", fmt.Errorf("failed to get trash directory: %w", err)
@@ -235,10 +231,7 @@ func SweepTrash() {
 		return
 	}
 	for _, entry := range entries {
-		path := filepath.Join(trashDir, entry.Name())
-		if err := os.RemoveAll(path); err != nil {
-			log.WarningLog.Printf("could not sweep trash entry %s: %v", path, err)
-		}
+		DeleteTrashPath(filepath.Join(trashDir, entry.Name()))
 	}
 }
 

@@ -431,7 +431,9 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 			)
 		}
 
-		instance := m.list.GetInstances()[m.list.NumInstances()-1]
+		// The new instance is the selected one -- it is not necessarily last in the list,
+		// since AddInstance inserts at the bottom of the active group.
+		instance := m.list.GetSelectedInstance()
 		switch msg.Type {
 		// Start the instance (enable previews etc) and go back to the main menu state.
 		case tea.KeyEnter:
@@ -719,7 +721,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		}
 
 		m.newInstanceFinalizer = m.list.AddInstance(instance)
-		m.list.SetSelectedInstance(m.list.NumInstances() - 1)
+		m.list.SelectInstance(instance)
 		m.state = stateNew
 		m.menu.SetState(ui.StateNewInstance)
 		m.promptAfterName = true
@@ -740,7 +742,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		}
 
 		m.newInstanceFinalizer = m.list.AddInstance(instance)
-		m.list.SetSelectedInstance(m.list.NumInstances() - 1)
+		m.list.SelectInstance(instance)
 		m.state = stateNew
 		m.menu.SetState(ui.StateNewInstance)
 
@@ -830,10 +832,17 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		}
 
 		pauseAction := func() {
-			if err := selected.Pause(); err != nil {
+			err := selected.Pause()
+			if err != nil {
 				m.handleError(err)
 			}
 			m.tabbedWindow.CleanupTerminalForInstance(selected.Title)
+			// Pause can bail out before flipping the status, leaving the instance active.
+			// Only regroup once it really is paused, so a failed checkout doesn't reorder
+			// the list or move the cursor.
+			if err == nil {
+				m.moveToGroupBoundary(selected)
+			}
 			m.instanceChanged()
 		}
 
@@ -883,7 +892,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		if err := selected.Resume(); err != nil {
 			return m, m.handleError(err)
 		}
-		return m, tea.WindowSize()
+		return m, tea.Batch(tea.WindowSize(), m.moveToGroupBoundary(selected))
 	case keys.KeyRename:
 		selected := m.list.GetSelectedInstance()
 		if selected == nil || selected.Status == session.Loading {
@@ -915,6 +924,11 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 			// pointed at is about to be killed.
 			m.tabbedWindow.CleanupTerminalForInstance(selected.Title)
 			if err := selected.RestartInstance(); err != nil {
+				// RestartInstance pauses before resuming, so a failed resume leaves the
+				// instance paused where it stands -- regroup it so the list stays sorted.
+				if selected.Paused() {
+					m.moveToGroupBoundary(selected)
+				}
 				return err
 			}
 			// Auto-attach to the freshly-started session so the user lands
@@ -967,6 +981,16 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 	default:
 		return m, nil
 	}
+}
+
+// moveToGroupBoundary repositions an instance whose paused state just changed so the active group
+// stays on top, moves the cursor onto it, and persists the new order.
+func (m *home) moveToGroupBoundary(instance *session.Instance) tea.Cmd {
+	m.list.MoveToGroupBoundary(instance)
+	if err := m.storage.SaveInstances(m.list.GetInstances()); err != nil {
+		return m.handleError(err)
+	}
+	return nil
 }
 
 // instanceChanged updates the preview pane, menu, and diff pane based on the selected instance. It returns an error

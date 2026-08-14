@@ -31,8 +31,18 @@ func newTestList(n int, height int) *List {
 	return l
 }
 
-// newTestListWithTitles creates a list with named instances for reorder tests.
+// newTestListWithTitles creates a list with named active instances for reorder tests.
 func newTestListWithTitles(titles ...string) *List {
+	return newTestListWithGroups(titles)
+}
+
+// newTestListWithGroups builds a list whose items match the given titles, marking the ones in
+// pausedTitles as paused. The order given is the order stored.
+func newTestListWithGroups(titles []string, pausedTitles ...string) *List {
+	paused := make(map[string]bool, len(pausedTitles))
+	for _, t := range pausedTitles {
+		paused[t] = true
+	}
 	s := spinner.New()
 	l := NewList(&s, false)
 	for _, t := range titles {
@@ -41,7 +51,10 @@ func newTestListWithTitles(titles ...string) *List {
 			Path:    ".",
 			Program: "echo",
 		})
-		l.AddInstance(inst)
+		if paused[t] {
+			inst.Status = session.Paused
+		}
+		l.items = append(l.items, inst)
 	}
 	return l
 }
@@ -295,4 +308,104 @@ func TestMoveWithSingleItem(t *testing.T) {
 
 	require.False(t, l.MoveUp())
 	require.False(t, l.MoveDown())
+}
+
+func titlesOf(l *List) []string {
+	out := make([]string, len(l.items))
+	for i, inst := range l.items {
+		out[i] = inst.Title
+	}
+	return out
+}
+
+func TestAddInstance_InsertsAtBottomOfActiveGroup(t *testing.T) {
+	l := newTestListWithGroups([]string{"a", "p1", "p2"}, "p1", "p2")
+
+	inst, _ := session.NewInstance(session.InstanceOptions{Title: "new", Path: ".", Program: "echo"})
+	l.AddInstance(inst)
+
+	require.Equal(t, []string{"a", "new", "p1", "p2"}, titlesOf(l))
+}
+
+func TestAddInstance_PausedGoesToEnd(t *testing.T) {
+	l := newTestListWithGroups([]string{"a", "p1"}, "p1")
+
+	inst, _ := session.NewInstance(session.InstanceOptions{Title: "p2", Path: ".", Program: "echo"})
+	inst.Status = session.Paused
+	l.AddInstance(inst)
+
+	require.Equal(t, []string{"a", "p1", "p2"}, titlesOf(l))
+}
+
+func TestMoveToGroupBoundary_Resume(t *testing.T) {
+	l := newTestListWithGroups([]string{"a", "b", "p1", "p2"}, "p1", "p2")
+
+	// p2 was just resumed: it is no longer paused and should land below "b".
+	resumed := l.items[3]
+	resumed.Status = session.Ready
+	l.MoveToGroupBoundary(resumed)
+
+	require.Equal(t, []string{"a", "b", "p2", "p1"}, titlesOf(l))
+	require.Equal(t, 2, l.selectedIdx)
+}
+
+func TestMoveToGroupBoundary_Pause(t *testing.T) {
+	l := newTestListWithGroups([]string{"a", "b", "c", "p1"}, "p1")
+
+	// "a" was just paused: it should land at the top of the paused group.
+	paused := l.items[0]
+	paused.Status = session.Paused
+	l.MoveToGroupBoundary(paused)
+
+	require.Equal(t, []string{"b", "c", "a", "p1"}, titlesOf(l))
+	require.Equal(t, 2, l.selectedIdx)
+}
+
+func TestMove_StaysWithinGroup(t *testing.T) {
+	l := newTestListWithGroups([]string{"a", "b", "p1", "p2"}, "p1", "p2")
+
+	// Last active item wraps to the top of the active group, not into the paused group.
+	l.SetSelectedInstance(1)
+	require.True(t, l.MoveDown())
+	require.Equal(t, []string{"b", "a", "p1", "p2"}, titlesOf(l))
+	require.Equal(t, 0, l.selectedIdx)
+
+	// First paused item wraps to the bottom of the paused group.
+	l.SetSelectedInstance(2)
+	require.True(t, l.MoveUp())
+	require.Equal(t, []string{"b", "a", "p2", "p1"}, titlesOf(l))
+	require.Equal(t, 3, l.selectedIdx)
+}
+
+func TestMove_SingleItemGroupIsNoop(t *testing.T) {
+	l := newTestListWithGroups([]string{"a", "p1"}, "p1")
+
+	l.SetSelectedInstance(0)
+	require.False(t, l.MoveUp())
+	require.False(t, l.MoveDown())
+	l.SetSelectedInstance(1)
+	require.False(t, l.MoveUp())
+	require.False(t, l.MoveDown())
+}
+
+func TestGroupDivider_OnlyWhenBothGroupsPresent(t *testing.T) {
+	l := newTestListWithGroups([]string{"a", "p1"}, "p1")
+	l.SetSize(60, 40)
+	require.Contains(t, l.String(), "paused")
+
+	l = newTestListWithGroups([]string{"a", "b"})
+	l.SetSize(60, 40)
+	require.NotContains(t, l.String(), "paused")
+}
+
+func TestAddInstance_SelectInstanceFindsNewItem(t *testing.T) {
+	// AddInstance no longer appends, so callers must locate the new instance by identity
+	// rather than assuming it is last.
+	l := newTestListWithGroups([]string{"a", "p1"}, "p1")
+
+	inst, _ := session.NewInstance(session.InstanceOptions{Title: "new", Path: ".", Program: "echo"})
+	l.AddInstance(inst)
+	l.SelectInstance(inst)
+
+	require.Same(t, inst, l.GetSelectedInstance())
 }

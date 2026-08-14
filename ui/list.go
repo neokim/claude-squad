@@ -5,6 +5,7 @@ import (
 	"claude-squad/session"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -27,6 +28,9 @@ var removedLinesStyle = lipgloss.NewStyle().
 
 var pausedStyle = lipgloss.NewStyle().
 	Foreground(lipgloss.AdaptiveColor{Light: "#888888", Dark: "#888888"})
+
+var groupDividerStyle = lipgloss.NewStyle().
+	Foreground(lipgloss.AdaptiveColor{Light: "#bbbbbb", Dark: "#555555"})
 
 var titleStyle = lipgloss.NewStyle().
 	Padding(1, 1, 0, 1).
@@ -79,8 +83,11 @@ var selectedInnerStyle = lipgloss.NewStyle().
 	Foreground(lipgloss.AdaptiveColor{Light: "#1a1a1a", Dark: "#1a1a1a"})
 
 type listRenderedItem struct {
-	text  string
-	lines int
+	text string
+	// divider marks the item the group divider is drawn above. The divider is only rendered
+	// when the item is visible, so it costs nothing while scrolled out of view.
+	divider bool
+	lines   int
 }
 
 type List struct {
@@ -294,6 +301,19 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool, h
 	return text
 }
 
+// renderGroupDivider renders the line separating the active group from the paused group.
+func (l *List) renderGroupDivider() string {
+	const label = " paused "
+	width := AdjustPreviewWidth(l.width) + 2
+	fill := width - runewidth.StringWidth(label)
+	if fill < 2 {
+		return groupDividerStyle.Render(label)
+	}
+	left := fill / 2
+	return groupDividerStyle.Render(
+		strings.Repeat("─", left) + label + strings.Repeat("─", fill-left))
+}
+
 func (l *List) String() string {
 	titleText := " Instances "
 	if total := len(l.items); total > 0 {
@@ -333,12 +353,19 @@ func (l *List) String() string {
 		availableLines = 1
 	}
 
+	dividerIdx := l.dividerIndex()
+
 	// Render all items and measure their line heights (without separator).
 	rendered := make([]listRenderedItem, len(l.items))
 	for i, item := range l.items {
 		text := l.renderer.Render(item, i+1, i == l.selectedIdx, len(l.repos) > 1, l.searchQuery)
 		lineCount := strings.Count(text, "\n") + 1
 		rendered[i] = listRenderedItem{text: text, lines: lineCount}
+		if i == dividerIdx {
+			// The divider plus a blank line below it read as their own band above the item.
+			rendered[i].divider = true
+			rendered[i].lines += 2
+		}
 	}
 	if len(rendered) == 0 {
 		return lipgloss.Place(l.width, l.height, lipgloss.Left, lipgloss.Top, b.String())
@@ -363,6 +390,10 @@ func (l *List) String() string {
 		linesUsed += needed
 	}
 	for i := l.scrollOffset; i <= lastVisible; i++ {
+		if rendered[i].divider {
+			b.WriteString(l.renderGroupDivider())
+			b.WriteString("\n\n")
+		}
 		b.WriteString(rendered[i].text)
 		if i != lastVisible {
 			b.WriteString("\n\n")
@@ -370,6 +401,16 @@ func (l *List) String() string {
 	}
 
 	return lipgloss.Place(l.width, l.height, lipgloss.Left, lipgloss.Top, b.String())
+}
+
+// dividerIndex returns the index of the item the group divider is drawn above, or -1 when
+// either group is empty and no divider is shown.
+func (l *List) dividerIndex() int {
+	boundary := groupBoundary(l.items)
+	if boundary == 0 || boundary == len(l.items) {
+		return -1
+	}
+	return boundary
 }
 
 // clampScrollOffset reduces the scroll offset so that the last item aligns
@@ -386,6 +427,7 @@ func (l *List) clampScrollOffset() {
 		return
 	}
 
+	dividerIdx := l.dividerIndex()
 	for l.scrollOffset > 0 {
 		// Calculate total lines from scrollOffset to end.
 		linesUsed := 0
@@ -393,6 +435,9 @@ func (l *List) clampScrollOffset() {
 			lines := 4 // approximate item height
 			if i > l.scrollOffset {
 				lines += 1 // separator
+			}
+			if i == dividerIdx {
+				lines += 2 // group divider + its blank line
 			}
 			linesUsed += lines
 		}
@@ -513,11 +558,18 @@ func (l *List) rmRepo(repo string) {
 	}
 }
 
-// AddInstance adds a new instance to the list. It returns a finalizer function that should be called when the instance
+// AddInstance adds a new instance to the list. Active instances go to the bottom of the active
+// group; paused ones are appended at the end so that a batch restore from storage keeps its
+// relative order.
+// It returns a finalizer function that should be called when the instance
 // is started. If the instance was restored from storage or is paused, you can call the finalizer immediately.
 // When creating a new one and entering the name, you want to call the finalizer once the name is done.
 func (l *List) AddInstance(instance *session.Instance) (finalize func()) {
-	l.items = append(l.items, instance)
+	idx := len(l.items)
+	if !instance.Paused() {
+		idx = groupBoundary(l.items)
+	}
+	l.insertAt(idx, instance)
 	// The finalizer registers the repo name once the instance is started.
 	return func() {
 		repoName, err := instance.RepoName()
@@ -559,13 +611,15 @@ func (l *List) SelectInstance(target *session.Instance) {
 // MoveUp swaps the selected instance with the one above it. Wraps to the
 // bottom when at the top.
 func (l *List) MoveUp() bool {
-	if len(l.items) < 2 {
+	lo, hi, ok := l.selectedGroupRange()
+	if !ok || hi == lo {
 		return false
 	}
-	if l.selectedIdx <= 0 {
-		first := l.items[0]
-		l.items = append(l.items[1:], first)
-		l.selectedIdx = len(l.items) - 1
+	if l.selectedIdx == lo {
+		first := l.items[lo]
+		copy(l.items[lo:hi], l.items[lo+1:hi+1])
+		l.items[hi] = first
+		l.selectedIdx = hi
 		return true
 	}
 	l.items[l.selectedIdx], l.items[l.selectedIdx-1] = l.items[l.selectedIdx-1], l.items[l.selectedIdx]
@@ -576,18 +630,66 @@ func (l *List) MoveUp() bool {
 // MoveDown swaps the selected instance with the one below it. Wraps to the
 // top when at the bottom.
 func (l *List) MoveDown() bool {
-	if len(l.items) < 2 {
+	lo, hi, ok := l.selectedGroupRange()
+	if !ok || hi == lo {
 		return false
 	}
-	if l.selectedIdx >= len(l.items)-1 {
-		last := l.items[len(l.items)-1]
-		l.items = append([]*session.Instance{last}, l.items[:len(l.items)-1]...)
-		l.selectedIdx = 0
+	if l.selectedIdx == hi {
+		last := l.items[hi]
+		copy(l.items[lo+1:hi+1], l.items[lo:hi])
+		l.items[lo] = last
+		l.selectedIdx = lo
 		return true
 	}
 	l.items[l.selectedIdx], l.items[l.selectedIdx+1] = l.items[l.selectedIdx+1], l.items[l.selectedIdx]
 	l.selectedIdx++
 	return true
+}
+
+// groupBoundary returns the index of the first paused instance, i.e. the frontier between the
+// active group (top) and the paused group (bottom).
+func groupBoundary(items []*session.Instance) int {
+	for i, inst := range items {
+		if inst.Paused() {
+			return i
+		}
+	}
+	return len(items)
+}
+
+// selectedGroupRange returns the inclusive [lo, hi] index range of the group the selected
+// instance belongs to. ok is false when there is no selection.
+func (l *List) selectedGroupRange() (lo, hi int, ok bool) {
+	if l.selectedIdx < 0 || l.selectedIdx >= len(l.items) {
+		return 0, 0, false
+	}
+	boundary := groupBoundary(l.items)
+	if l.selectedIdx < boundary {
+		return 0, boundary - 1, true
+	}
+	return boundary, len(l.items) - 1, true
+}
+
+// insertAt inserts instance at idx, shifting the rest down.
+func (l *List) insertAt(idx int, instance *session.Instance) {
+	l.items = append(l.items, nil)
+	copy(l.items[idx+1:], l.items[idx:])
+	l.items[idx] = instance
+}
+
+// MoveToGroupBoundary moves an instance whose paused state just changed to the frontier between
+// the active and paused groups, and puts the cursor on it. A resumed instance lands at the bottom
+// of the active group and a paused one at the top of the paused group -- the same index either way.
+func (l *List) MoveToGroupBoundary(target *session.Instance) {
+	idx := slices.Index(l.items, target)
+	if idx < 0 {
+		return
+	}
+	l.items = append(l.items[:idx], l.items[idx+1:]...)
+	boundary := groupBoundary(l.items)
+	l.insertAt(boundary, target)
+	l.SetSelectedInstance(boundary)
+	l.clampScrollOffset()
 }
 
 // GetInstances returns all instances in the list

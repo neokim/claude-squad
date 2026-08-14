@@ -126,6 +126,10 @@ type home struct {
 	// any component that overflows its SetSize height can't push the layout
 	// past the terminal height.
 	contentHeight int
+
+	// listWidth is the width of the session list pane, used to route mouse
+	// wheel events to the list or the preview depending on the cursor column.
+	listWidth int
 }
 
 func newHome(ctx context.Context, program string, autoYes bool) *home {
@@ -195,6 +199,7 @@ func (m *home) updateHandleWindowSizeEvent(msg tea.WindowSizeMsg) {
 	m.tabbedWindow.SetSize(tabsWidth, contentHeight)
 	m.list.SetSize(listWidth, contentHeight)
 	m.contentHeight = contentHeight
+	m.listWidth = listWidth
 
 	if m.textInputOverlay != nil {
 		m.textInputOverlay.SetSize(int(float32(msg.Width)*0.6), int(float32(msg.Height)*0.4))
@@ -300,9 +305,23 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tickUpdateMetadataCmd(m.snapshotActiveInstances(), m.list.GetSelectedInstance())
 	case tea.MouseMsg:
-		// Handle mouse wheel events for scrolling the diff/preview pane
+		// Handle mouse wheel events: over the session list it moves the
+		// selection, elsewhere it scrolls the diff/preview pane.
 		if msg.Action == tea.MouseActionPress {
 			if msg.Button == tea.MouseButtonWheelDown || msg.Button == tea.MouseButtonWheelUp {
+				if msg.X < m.listWidth {
+					if m.list.NumInstances() == 0 {
+						return m, nil
+					}
+					switch msg.Button {
+					case tea.MouseButtonWheelUp:
+						m.list.Up()
+					case tea.MouseButtonWheelDown:
+						m.list.Down()
+					}
+					return m, m.instanceChanged()
+				}
+
 				selected := m.list.GetSelectedInstance()
 				if selected == nil || selected.Inactive() {
 					return m, nil

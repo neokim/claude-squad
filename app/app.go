@@ -22,16 +22,13 @@ import (
 
 // Run is the main entrypoint into the application.
 func Run(ctx context.Context, program string, autoYes bool) error {
-	h := newHome(ctx, program, autoYes)
+	// Reclaim worktrees whose background delete didn't finish before the last quit.
+	go git.SweepTrash()
 	p := tea.NewProgram(
-		h,
+		newHome(ctx, program, autoYes),
 		tea.WithAltScreen(),
 		tea.WithMouseCellMotion(), // Mouse scroll
 	)
-	// Background work (pausing) needs to hand its result back to the update loop.
-	h.teaProgram = p
-	// Reclaim worktrees whose background delete didn't finish before the last quit.
-	go git.SweepTrash()
 	_, err := p.Run()
 	return err
 }
@@ -64,9 +61,10 @@ type searchState struct {
 type home struct {
 	ctx context.Context
 
-	// teaProgram is the running bubbletea program, used to deliver results from
-	// background goroutines (see pauseDoneMsg) into the update loop.
-	teaProgram *tea.Program
+	// pauseResults carries the outcome of background pauses back into the update
+	// loop, and pauseWG tracks the ones still running so quit can wait for them.
+	pauseResults chan pauseDoneMsg
+	pauseWG      sync.WaitGroup
 
 	// -- Storage and Configuration --
 
@@ -159,6 +157,7 @@ func newHome(ctx context.Context, program string, autoYes bool) *home {
 		autoYes:      autoYes,
 		state:        stateDefault,
 		appState:     appState,
+		pauseResults: make(chan pauseDoneMsg, 16),
 	}
 	h.list = ui.NewList(&h.spinner, autoYes)
 
@@ -221,7 +220,16 @@ func (m *home) Init() tea.Cmd {
 			return previewTickMsg{}
 		},
 		tickUpdateMetadataCmd(m.snapshotActiveInstances(), m.list.GetSelectedInstance()),
+		m.waitForPause(),
 	)
+}
+
+// waitForPause blocks in a Cmd until a background pause reports back, turning it
+// into a message the update loop can handle. Re-issued after each result.
+func (m *home) waitForPause() tea.Cmd {
+	return func() tea.Msg {
+		return <-m.pauseResults
+	}
 }
 
 func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -268,8 +276,10 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(tea.WindowSize(), m.instanceChanged())
 	case metadataUpdateDoneMsg:
 		for _, r := range msg.results {
-			// Skip instances that were paused while metadata was being computed
-			if r.instance.Status == session.Paused {
+			// Skip instances that were paused (or are pausing) while metadata was
+			// being computed -- otherwise a tick in flight resurrects the status
+			// mid-teardown and re-enables every action the pause guard blocks.
+			if r.instance.Inactive() {
 				continue
 			}
 			if r.updated {
@@ -294,7 +304,7 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Action == tea.MouseActionPress {
 			if msg.Button == tea.MouseButtonWheelDown || msg.Button == tea.MouseButtonWheelUp {
 				selected := m.list.GetSelectedInstance()
-				if selected == nil || selected.Status == session.Paused {
+				if selected == nil || selected.Inactive() {
 					return m, nil
 				}
 
@@ -333,15 +343,7 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Handle instance changed after confirmation action
 		return m, m.instanceChanged()
 	case pauseDoneMsg:
-		// Pause can bail out before flipping the status, leaving the instance
-		// active. Put it back so a failed checkout doesn't strand it in Pausing
-		// or reorder the list.
-		if msg.err != nil {
-			msg.instance.SetStatus(session.Ready)
-			return m, tea.Batch(m.handleError(msg.err), m.instanceChanged())
-		}
-		msg.instance.SetStatus(session.Paused)
-		return m, tea.Batch(m.moveToGroupBoundary(msg.instance), m.instanceChanged())
+		return m, tea.Batch(m.applyPauseResult(msg), m.instanceChanged(), m.waitForPause())
 	case instanceStartedMsg:
 		// Select the instance that just started (or failed)
 		m.list.SelectInstance(msg.instance)
@@ -385,10 +387,51 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *home) handleQuit() (tea.Model, tea.Cmd) {
+	// A pause in flight may still be committing the session's uncommitted work.
+	// Quitting through it would persist the instance as paused while its worktree
+	// is untouched, and the next Resume would wipe that work rebuilding it.
+	m.pauseWG.Wait()
+	m.drainPauseResults()
+
 	if err := m.storage.SaveInstances(m.list.GetInstances()); err != nil {
 		return m, m.handleError(err)
 	}
 	return m, tea.Quit
+}
+
+// drainPauseResults applies every pause outcome that landed but hasn't been
+// delivered to Update yet. Only meaningful on the way out, when no further
+// messages will be processed.
+func (m *home) drainPauseResults() {
+	for {
+		select {
+		case msg := <-m.pauseResults:
+			m.applyPauseResult(msg)
+		default:
+			return
+		}
+	}
+}
+
+// applyPauseResult settles an instance out of Pausing. Pause leaves Status
+// alone, so this is the only place the transition happens.
+func (m *home) applyPauseResult(msg pauseDoneMsg) tea.Cmd {
+	if msg.err != nil {
+		// The pause didn't happen and the session is still live -- put it back
+		// where it was rather than stranding it in Pausing.
+		msg.instance.SetStatus(session.Ready)
+		return m.handleError(msg.err)
+	}
+
+	msg.instance.SetStatus(session.Paused)
+	// Regrouping moves the cursor to the boundary, which would yank the user off
+	// whatever they navigated to while the pause ran. Put it back.
+	selected := m.list.GetSelectedInstance()
+	cmd := m.moveToGroupBoundary(msg.instance)
+	if selected != nil && selected != msg.instance {
+		m.list.SelectInstance(selected)
+	}
+	return cmd
 }
 
 func (m *home) handleMenuHighlighting(msg tea.KeyMsg) (cmd tea.Cmd, returnEarly bool) {
@@ -407,7 +450,7 @@ func (m *home) handleMenuHighlighting(msg tea.KeyMsg) (cmd tea.Cmd, returnEarly 
 		return nil, false
 	}
 
-	if m.list.GetSelectedInstance() != nil && m.list.GetSelectedInstance().Paused() && name == keys.KeyEnter {
+	if m.list.GetSelectedInstance() != nil && m.list.GetSelectedInstance().Inactive() && name == keys.KeyEnter {
 		return nil, false
 	}
 	if name == keys.KeyShiftDown || name == keys.KeyShiftUp {
@@ -704,7 +747,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 
 	// A pause in flight owns the session's worktree and tmux. Reject anything
 	// that would touch either until it settles into Paused.
-	if selected := m.list.GetSelectedInstance(); selected != nil && selected.Pausing() && isPausingBlocked(name) {
+	if selected := m.list.GetSelectedInstance(); selected != nil && selected.Pausing() && pausingBlockedKeys[name] {
 		return m, m.handleError(fmt.Errorf("session '%s' is still pausing", selected.Title))
 	}
 
@@ -852,7 +895,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m, m.confirmAction(message, pushAction)
 	case keys.KeyCheckout:
 		selected := m.list.GetSelectedInstance()
-		if selected == nil || selected.Status == session.Loading || selected.Paused() {
+		if selected == nil || selected.Status == session.Loading || selected.Inactive() {
 			return m, nil
 		}
 
@@ -865,10 +908,10 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 			m.tabbedWindow.CleanupTerminalForInstance(selected.Title)
 			m.instanceChanged()
 
-			instance := selected
+			m.pauseWG.Add(1)
 			go func() {
-				err := instance.Pause()
-				m.teaProgram.Send(pauseDoneMsg{instance: instance, err: err})
+				defer m.pauseWG.Done()
+				m.pauseResults <- pauseDoneMsg{instance: selected, err: selected.Pause()}
 			}()
 		}
 
@@ -924,7 +967,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		if selected == nil || selected.Status == session.Loading {
 			return m, nil
 		}
-		if !selected.Paused() {
+		if !selected.Inactive() {
 			return m, m.handleError(fmt.Errorf("rename only allowed for paused instances"))
 		}
 		m.state = stateRename
@@ -952,7 +995,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 			if err := selected.RestartInstance(); err != nil {
 				// RestartInstance pauses before resuming, so a failed resume leaves the
 				// instance paused where it stands -- regroup it so the list stays sorted.
-				if selected.Paused() {
+				if selected.Inactive() {
 					m.moveToGroupBoundary(selected)
 				}
 				return err
@@ -976,7 +1019,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 			return m, nil
 		}
 		selected := m.list.GetSelectedInstance()
-		if selected == nil || selected.Paused() || selected.Status == session.Loading || !selected.TmuxAlive() {
+		if selected == nil || selected.Inactive() || selected.Status == session.Loading || !selected.TmuxAlive() {
 			return m, nil
 		}
 		// Terminal tab: attach to terminal session
@@ -1077,10 +1120,6 @@ var pausingBlockedKeys = map[keys.KeyName]bool{
 	keys.KeyRestartInstance: true,
 }
 
-func isPausingBlocked(name keys.KeyName) bool {
-	return pausingBlockedKeys[name]
-}
-
 // pauseDoneMsg reports the result of a background Pause back to the update loop.
 type pauseDoneMsg struct {
 	instance *session.Instance
@@ -1164,7 +1203,7 @@ func runInstanceStartCmd(instance *session.Instance) tea.Cmd {
 func (m *home) snapshotActiveInstances() []*session.Instance {
 	var out []*session.Instance
 	for _, inst := range m.list.GetInstances() {
-		if inst.Started() && !inst.Paused() {
+		if inst.Started() && !inst.Inactive() {
 			out = append(out, inst)
 		}
 	}

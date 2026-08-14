@@ -66,7 +66,7 @@ func (p *PreviewPane) UpdateContent(instance *session.Instance) error {
 	case instance.Status == session.Loading:
 		p.setFallbackState("Setting up workspace...")
 		return nil
-	case instance.Status == session.Paused:
+	case instance.Inactive():
 		checkoutLine := fmt.Sprintf("The instance can be checked out at '%s'", instance.Branch)
 		if p.copyInstanceNameOnCheckout {
 			checkoutLine += " (copied to your clipboard)"
@@ -193,7 +193,7 @@ func (p *PreviewPane) String() string {
 
 // ScrollUp scrolls up in the viewport
 func (p *PreviewPane) ScrollUp(instance *session.Instance) error {
-	if instance == nil || instance.Status == session.Paused {
+	if instance == nil || instance.Inactive() {
 		return nil
 	}
 
@@ -226,7 +226,7 @@ func (p *PreviewPane) ScrollUp(instance *session.Instance) error {
 
 // ScrollDown scrolls down in the viewport
 func (p *PreviewPane) ScrollDown(instance *session.Instance) error {
-	if instance == nil || instance.Status == session.Paused {
+	if instance == nil || instance.Inactive() {
 		return nil
 	}
 
@@ -259,7 +259,7 @@ func (p *PreviewPane) ScrollDown(instance *session.Instance) error {
 
 // ResetToNormalMode exits scroll mode and returns to normal mode
 func (p *PreviewPane) ResetToNormalMode(instance *session.Instance) error {
-	if instance == nil || instance.Status == session.Paused {
+	if instance == nil || instance.Inactive() {
 		return nil
 	}
 

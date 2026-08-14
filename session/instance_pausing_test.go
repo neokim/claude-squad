@@ -1,12 +1,17 @@
 package session
 
-import "testing"
+import (
+	"claude-squad/session/git"
+	"claude-squad/session/tmux"
+	"path/filepath"
+	"testing"
+)
 
-func TestPausedCoversPausing(t *testing.T) {
+func TestInactiveCoversPausing(t *testing.T) {
 	tests := []struct {
-		status  Status
-		paused  bool
-		pausing bool
+		status   Status
+		inactive bool
+		pausing  bool
 	}{
 		{Running, false, false},
 		{Ready, false, false},
@@ -17,8 +22,8 @@ func TestPausedCoversPausing(t *testing.T) {
 
 	for _, tt := range tests {
 		i := &Instance{Status: tt.status}
-		if got := i.Paused(); got != tt.paused {
-			t.Errorf("status %v: Paused() = %v, want %v", tt.status, got, tt.paused)
+		if got := i.Inactive(); got != tt.inactive {
+			t.Errorf("status %v: Inactive() = %v, want %v", tt.status, got, tt.inactive)
 		}
 		if got := i.Pausing(); got != tt.pausing {
 			t.Errorf("status %v: Pausing() = %v, want %v", tt.status, got, tt.pausing)
@@ -73,5 +78,32 @@ func TestAttachExternal_RejectedWhilePausing(t *testing.T) {
 
 	if err := i.AttachExternal(); err == nil {
 		t.Fatal("expected AttachExternal() to fail while pausing")
+	}
+}
+
+// Pause runs on a background goroutine while the update loop reads Status on
+// every render. Writing Status there would be a data race and would also race
+// the update loop's own transition, so Pause must leave it alone.
+func TestPause_LeavesStatusToTheCaller(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	// A worktree whose directory never existed is orphaned, which is the one
+	// Pause path that reaches the end without any git or tmux state to operate on.
+	worktreePath := filepath.Join(t.TempDir(), "gone")
+	i := &Instance{
+		Title:       "test",
+		Status:      Pausing,
+		started:     true,
+		tmuxSession: tmux.NewTmuxSession("test", "echo"),
+		gitWorktree: git.NewGitWorktreeFromStorage(
+			t.TempDir(), worktreePath, "test", "feature/test", "", false),
+	}
+
+	if err := i.Pause(); err != nil {
+		t.Fatalf("Pause() error = %v", err)
+	}
+
+	if i.Status != Pausing {
+		t.Fatalf("Pause() changed status to %v, want it left at %v", i.Status, Pausing)
 	}
 }

@@ -9,8 +9,8 @@ import (
 
 // newTrashTestRepo sets up a repo with one commit and a live worktree on a
 // feature branch, with HOME pointed at a temp dir so the trash directory is
-// isolated. It returns the worktree and the temp home.
-func newTrashTestRepo(t *testing.T) (*GitWorktree, string) {
+// isolated.
+func newTrashTestRepo(t *testing.T) *GitWorktree {
 	t.Helper()
 
 	tempHome := t.TempDir()
@@ -36,41 +36,20 @@ func newTrashTestRepo(t *testing.T) (*GitWorktree, string) {
 		repoPath:     repoPath,
 		worktreePath: worktreePath,
 		branchName:   "feature/test",
-	}, tempHome
+	}
 }
 
-func TestMoveToTrash_DetachesWorktreeAndPreservesContentsAndBranch(t *testing.T) {
-	g, tempHome := newTrashTestRepo(t)
+func TestMoveToTrash_DetachesWorktreeAndPreservesBranch(t *testing.T) {
+	g := newTrashTestRepo(t)
 
-	// A file that only exists in the worktree, so we can tell the contents were
-	// moved rather than deleted.
-	marker := filepath.Join(g.worktreePath, "marker.txt")
-	if err := os.WriteFile(marker, []byte("payload\n"), 0644); err != nil {
-		t.Fatalf("write marker: %v", err)
-	}
-
-	trashPath, err := g.MoveToTrash()
-	if err != nil {
+	if err := g.MoveToTrash(); err != nil {
 		t.Fatalf("MoveToTrash() error = %v", err)
 	}
 
-	if trashPath == "" {
-		t.Fatal("MoveToTrash() returned an empty trash path")
-	}
-	if want := filepath.Join(tempHome, ".claude-squad", "trash"); filepath.Dir(trashPath) != want {
-		t.Fatalf("trash path %q is not under %q", trashPath, want)
-	}
-
-	// The worktree directory is gone from its original location...
+	// The worktree directory is gone from its original location.
 	if _, err := os.Stat(g.worktreePath); !os.IsNotExist(err) {
 		t.Fatalf("worktree still at original path, err = %v", err)
 	}
-	// ...but its contents are intact in the trash, i.e. nothing was deleted on
-	// the critical path.
-	if _, err := os.Stat(filepath.Join(trashPath, "marker.txt")); err != nil {
-		t.Fatalf("marker not found in trash: %v", err)
-	}
-
 	// git no longer knows about the worktree.
 	if list := mustRunGit(t, g.repoPath, "worktree", "list"); strings.Contains(list, g.worktreePath) {
 		t.Fatalf("worktree still registered with git:\n%s", list)
@@ -82,13 +61,11 @@ func TestMoveToTrash_DetachesWorktreeAndPreservesContentsAndBranch(t *testing.T)
 }
 
 func TestMoveToTrash_AllowsWorktreeToBeRecreated(t *testing.T) {
-	g, _ := newTrashTestRepo(t)
+	g := newTrashTestRepo(t)
 
-	trashPath, err := g.MoveToTrash()
-	if err != nil {
+	if err := g.MoveToTrash(); err != nil {
 		t.Fatalf("MoveToTrash() error = %v", err)
 	}
-	DeleteTrashPath(trashPath)
 
 	// This is what Resume does.
 	g.isExistingBranch = true
@@ -102,16 +79,36 @@ func TestMoveToTrash_AllowsWorktreeToBeRecreated(t *testing.T) {
 	}
 }
 
-func TestDeleteTrashPath_RemovesContents(t *testing.T) {
-	g, _ := newTrashTestRepo(t)
+// The point of trashing is that the caller pays only for a rename: the contents
+// survive the move and are dropped afterwards, off the critical path.
+func TestMovePathToTrash_MovesContentsIntactIntoTrashDir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
 
-	trashPath, err := g.MoveToTrash()
+	dir := filepath.Join(t.TempDir(), "worktree")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "marker.txt"), []byte("payload\n"), 0644); err != nil {
+		t.Fatalf("write marker: %v", err)
+	}
+
+	trashPath, err := movePathToTrash(dir)
 	if err != nil {
-		t.Fatalf("MoveToTrash() error = %v", err)
+		t.Fatalf("movePathToTrash() error = %v", err)
+	}
+
+	if want := filepath.Join(home, ".claude-squad", "trash"); filepath.Dir(trashPath) != want {
+		t.Fatalf("trash path %q is not under %q", trashPath, want)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("source still exists, err = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(trashPath, "marker.txt")); err != nil {
+		t.Fatalf("marker not found in trash: %v", err)
 	}
 
 	DeleteTrashPath(trashPath)
-
 	if _, err := os.Stat(trashPath); !os.IsNotExist(err) {
 		t.Fatalf("trash path still exists after DeleteTrashPath, err = %v", err)
 	}
@@ -144,4 +141,51 @@ func TestSweepTrash_RemovesLeftovers(t *testing.T) {
 func TestSweepTrash_NoTrashDirIsNotAnError(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	SweepTrash() // must not panic
+}
+
+// Cleanup (the kill path) must not pay for the recursive delete either: it
+// detaches the worktree and drops the branch, leaving the contents to a
+// background delete.
+func TestCleanup_DetachesWorktreeAndDeletesBranch(t *testing.T) {
+	g := newTrashTestRepo(t)
+
+	if err := g.Cleanup(); err != nil {
+		t.Fatalf("Cleanup() error = %v", err)
+	}
+
+	if _, err := os.Stat(g.worktreePath); !os.IsNotExist(err) {
+		t.Fatalf("worktree still at original path, err = %v", err)
+	}
+	if list := mustRunGit(t, g.repoPath, "worktree", "list"); strings.Contains(list, g.worktreePath) {
+		t.Fatalf("worktree still registered with git:\n%s", list)
+	}
+	if refs := mustRunGit(t, g.repoPath, "branch", "--list", "feature/test"); strings.Contains(refs, "feature/test") {
+		t.Fatalf("branch feature/test was not deleted:\n%s", refs)
+	}
+}
+
+// A session started on a pre-existing branch only borrows it, so killing the
+// session must leave the branch alone.
+func TestCleanup_KeepsPreExistingBranch(t *testing.T) {
+	g := newTrashTestRepo(t)
+	g.isExistingBranch = true
+
+	if err := g.Cleanup(); err != nil {
+		t.Fatalf("Cleanup() error = %v", err)
+	}
+
+	if refs := mustRunGit(t, g.repoPath, "branch", "--list", "feature/test"); !strings.Contains(refs, "feature/test") {
+		t.Fatalf("pre-existing branch was deleted:\n%s", refs)
+	}
+}
+
+func TestCleanup_MissingWorktreeIsNotAnError(t *testing.T) {
+	g := newTrashTestRepo(t)
+	if err := os.RemoveAll(g.worktreePath); err != nil {
+		t.Fatalf("remove worktree: %v", err)
+	}
+
+	if err := g.Cleanup(); err != nil {
+		t.Fatalf("Cleanup() on a missing worktree error = %v", err)
+	}
 }

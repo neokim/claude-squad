@@ -109,15 +109,24 @@ func (g *GitWorktree) setupNewWorktree() error {
 func (g *GitWorktree) Cleanup() error {
 	var errs []error
 
-	// Check if worktree path exists before attempting removal
+	// Detach the worktree first. This has to happen before the branch is
+	// deleted: git refuses to delete a branch that a registered worktree is
+	// still using. Like Pause, the contents are only renamed aside here and
+	// deleted in the background, so killing a large session is not a stall.
 	if _, err := os.Stat(g.worktreePath); err == nil {
-		// Remove the worktree using git command
-		if _, err := g.runGitCommand(g.repoPath, "worktree", "remove", "-f", g.worktreePath); err != nil {
+		trashPath, err := g.MoveToTrash()
+		if trashPath != "" {
+			go DeleteTrashPath(trashPath)
+		}
+		if err != nil {
 			errs = append(errs, err)
 		}
 	} else if !os.IsNotExist(err) {
 		// Only append error if it's not a "not exists" error
 		errs = append(errs, fmt.Errorf("failed to check worktree path: %w", err))
+	} else if err := g.Prune(); err != nil {
+		// The directory is already gone but git may still hold the registration.
+		errs = append(errs, err)
 	}
 
 	// Delete the branch using git CLI, but skip if this is a pre-existing branch
@@ -128,11 +137,6 @@ func (g *GitWorktree) Cleanup() error {
 				errs = append(errs, fmt.Errorf("failed to remove branch %s: %w", g.branchName, err))
 			}
 		}
-	}
-
-	// Prune the worktree to clean up any remaining references
-	if err := g.Prune(); err != nil {
-		errs = append(errs, err)
 	}
 
 	if len(errs) > 0 {

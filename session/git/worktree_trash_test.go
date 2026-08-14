@@ -145,3 +145,50 @@ func TestSweepTrash_NoTrashDirIsNotAnError(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	SweepTrash() // must not panic
 }
+
+// Cleanup (the kill path) must not pay for the recursive delete either: it
+// detaches the worktree and drops the branch, leaving the contents to a
+// background delete.
+func TestCleanup_DetachesWorktreeAndDeletesBranch(t *testing.T) {
+	g, _ := newTrashTestRepo(t)
+
+	if err := g.Cleanup(); err != nil {
+		t.Fatalf("Cleanup() error = %v", err)
+	}
+
+	if _, err := os.Stat(g.worktreePath); !os.IsNotExist(err) {
+		t.Fatalf("worktree still at original path, err = %v", err)
+	}
+	if list := mustRunGit(t, g.repoPath, "worktree", "list"); strings.Contains(list, g.worktreePath) {
+		t.Fatalf("worktree still registered with git:\n%s", list)
+	}
+	if refs := mustRunGit(t, g.repoPath, "branch", "--list", "feature/test"); strings.Contains(refs, "feature/test") {
+		t.Fatalf("branch feature/test was not deleted:\n%s", refs)
+	}
+}
+
+// A session started on a pre-existing branch only borrows it, so killing the
+// session must leave the branch alone.
+func TestCleanup_KeepsPreExistingBranch(t *testing.T) {
+	g, _ := newTrashTestRepo(t)
+	g.isExistingBranch = true
+
+	if err := g.Cleanup(); err != nil {
+		t.Fatalf("Cleanup() error = %v", err)
+	}
+
+	if refs := mustRunGit(t, g.repoPath, "branch", "--list", "feature/test"); !strings.Contains(refs, "feature/test") {
+		t.Fatalf("pre-existing branch was deleted:\n%s", refs)
+	}
+}
+
+func TestCleanup_MissingWorktreeIsNotAnError(t *testing.T) {
+	g, _ := newTrashTestRepo(t)
+	if err := os.RemoveAll(g.worktreePath); err != nil {
+		t.Fatalf("remove worktree: %v", err)
+	}
+
+	if err := g.Cleanup(); err != nil {
+		t.Fatalf("Cleanup() on a missing worktree error = %v", err)
+	}
+}

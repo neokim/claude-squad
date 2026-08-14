@@ -181,7 +181,7 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool, h
 	}
 	var join string
 	switch i.Status {
-	case session.Running, session.Loading:
+	case session.Running, session.Loading, session.Pausing:
 		spin := r.spinner.View()
 		trailing := " "
 		if selected {

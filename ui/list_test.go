@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"claude-squad/keys"
 	"claude-squad/log"
 	"claude-squad/session"
 	"os"
@@ -408,4 +409,32 @@ func TestAddInstance_SelectInstanceFindsNewItem(t *testing.T) {
 	l.SelectInstance(inst)
 
 	require.Same(t, inst, l.GetSelectedInstance())
+}
+
+// A pausing instance sorts with the paused group and renders with the spinner
+// rather than the paused icon, so the transition is visible.
+func TestAddInstance_PausingGoesToEnd(t *testing.T) {
+	l := newTestListWithTitles("a", "b")
+	inst, _ := session.NewInstance(session.InstanceOptions{Title: "c", Path: ".", Program: "echo"})
+	inst.Status = session.Pausing
+	l.AddInstance(inst)()
+
+	if got := l.items[len(l.items)-1].Title; got != "c" {
+		t.Fatalf("pausing instance placed at %q, want last", got)
+	}
+}
+
+func TestMenuOptions_PausingGetsMinimalOptions(t *testing.T) {
+	inst, _ := session.NewInstance(session.InstanceOptions{Title: "a", Path: ".", Program: "echo"})
+	inst.Status = session.Pausing
+
+	m := NewMenu()
+	m.SetInstance(inst)
+
+	for _, opt := range m.options {
+		switch opt {
+		case keys.KeyResume, keys.KeyCheckout, keys.KeyEnter, keys.KeyKill, keys.KeyRename:
+			t.Fatalf("menu offers %v while pausing", opt)
+		}
+	}
 }

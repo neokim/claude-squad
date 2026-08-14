@@ -2,16 +2,19 @@ package log
 
 import (
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
 	"time"
 )
 
+// Default to discarding output so code that logs before Initialize (or in
+// tests, which never call it) doesn't nil-panic.
 var (
-	WarningLog *log.Logger
-	InfoLog    *log.Logger
-	ErrorLog   *log.Logger
+	WarningLog = log.New(io.Discard, "", 0)
+	InfoLog    = log.New(io.Discard, "", 0)
+	ErrorLog   = log.New(io.Discard, "", 0)
 )
 
 var logFileName = filepath.Join(os.TempDir(), "claudesquad.log")

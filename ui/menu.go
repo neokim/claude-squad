@@ -157,8 +157,9 @@ func (m *Menu) setGroups(groups [][]keys.KeyName, actionGroupIdx map[int]bool) {
 }
 
 func (m *Menu) addInstanceOptions() {
-	// Loading instances only get minimal options
-	if m.instance != nil && m.instance.Status == session.Loading {
+	// Loading and pausing instances only get minimal options -- nothing that
+	// touches the worktree or the tmux session is safe mid-transition.
+	if m.instance != nil && (m.instance.Status == session.Loading || m.instance.Pausing()) {
 		m.options = []keys.KeyName{keys.KeyNew, keys.KeyHelp, keys.KeyQuit}
 		return
 	}

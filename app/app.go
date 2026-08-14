@@ -22,11 +22,16 @@ import (
 
 // Run is the main entrypoint into the application.
 func Run(ctx context.Context, program string, autoYes bool) error {
+	h := newHome(ctx, program, autoYes)
 	p := tea.NewProgram(
-		newHome(ctx, program, autoYes),
+		h,
 		tea.WithAltScreen(),
 		tea.WithMouseCellMotion(), // Mouse scroll
 	)
+	// Background work (pausing) needs to hand its result back to the update loop.
+	h.teaProgram = p
+	// Reclaim worktrees whose background delete didn't finish before the last quit.
+	go git.SweepTrash()
 	_, err := p.Run()
 	return err
 }
@@ -58,6 +63,10 @@ type searchState struct {
 
 type home struct {
 	ctx context.Context
+
+	// teaProgram is the running bubbletea program, used to deliver results from
+	// background goroutines (see pauseDoneMsg) into the update loop.
+	teaProgram *tea.Program
 
 	// -- Storage and Configuration --
 
@@ -323,6 +332,16 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case instanceChangedMsg:
 		// Handle instance changed after confirmation action
 		return m, m.instanceChanged()
+	case pauseDoneMsg:
+		// Pause can bail out before flipping the status, leaving the instance
+		// active. Put it back so a failed checkout doesn't strand it in Pausing
+		// or reorder the list.
+		if msg.err != nil {
+			msg.instance.SetStatus(session.Ready)
+			return m, tea.Batch(m.handleError(msg.err), m.instanceChanged())
+		}
+		msg.instance.SetStatus(session.Paused)
+		return m, tea.Batch(m.moveToGroupBoundary(msg.instance), m.instanceChanged())
 	case instanceStartedMsg:
 		// Select the instance that just started (or failed)
 		m.list.SelectInstance(msg.instance)
@@ -683,6 +702,12 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m, nil
 	}
 
+	// A pause in flight owns the session's worktree and tmux. Reject anything
+	// that would touch either until it settles into Paused.
+	if selected := m.list.GetSelectedInstance(); selected != nil && selected.Pausing() && isPausingBlocked(name) {
+		return m, m.handleError(fmt.Errorf("session '%s' is still pausing", selected.Title))
+	}
+
 	switch name {
 	case keys.KeySearch:
 		if m.list.NumInstances() == 0 {
@@ -827,23 +852,24 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m, m.confirmAction(message, pushAction)
 	case keys.KeyCheckout:
 		selected := m.list.GetSelectedInstance()
-		if selected == nil || selected.Status == session.Loading {
+		if selected == nil || selected.Status == session.Loading || selected.Paused() {
 			return m, nil
 		}
 
+		// Pause commits, detaches tmux and tears down the worktree, which can
+		// take seconds on a large session. Run it off the update loop so the TUI
+		// stays responsive, and mark the instance Pausing so it can't be resumed
+		// or attached before it settles. pauseDoneMsg finishes the transition.
 		pauseAction := func() {
-			err := selected.Pause()
-			if err != nil {
-				m.handleError(err)
-			}
+			selected.SetStatus(session.Pausing)
 			m.tabbedWindow.CleanupTerminalForInstance(selected.Title)
-			// Pause can bail out before flipping the status, leaving the instance active.
-			// Only regroup once it really is paused, so a failed checkout doesn't reorder
-			// the list or move the cursor.
-			if err == nil {
-				m.moveToGroupBoundary(selected)
-			}
 			m.instanceChanged()
+
+			instance := selected
+			go func() {
+				err := instance.Pause()
+				m.teaProgram.Send(pauseDoneMsg{instance: instance, err: err})
+			}()
 		}
 
 		// If git can't operate on the worktree (admin dir gone, etc.) Pause
@@ -1036,6 +1062,30 @@ type hideErrMsg struct{}
 type previewTickMsg struct{}
 
 type instanceChangedMsg struct{}
+
+// pausingBlockedKeys are the actions that need a settled session: they either
+// operate on the worktree or on the tmux session, both of which a background
+// Pause is still tearing down.
+var pausingBlockedKeys = map[keys.KeyName]bool{
+	keys.KeyEnter:           true,
+	keys.KeyAttachExternal:  true,
+	keys.KeyResume:          true,
+	keys.KeyCheckout:        true,
+	keys.KeyKill:            true,
+	keys.KeyRename:          true,
+	keys.KeySubmit:          true,
+	keys.KeyRestartInstance: true,
+}
+
+func isPausingBlocked(name keys.KeyName) bool {
+	return pausingBlockedKeys[name]
+}
+
+// pauseDoneMsg reports the result of a background Pause back to the update loop.
+type pauseDoneMsg struct {
+	instance *session.Instance
+	err      error
+}
 
 type instanceStartedMsg struct {
 	instance        *session.Instance

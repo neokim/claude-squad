@@ -1,12 +1,14 @@
 package git
 
 import (
+	"claude-squad/config"
 	"claude-squad/log"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // Setup creates a new worktree for the session
@@ -148,6 +150,92 @@ func (g *GitWorktree) Remove() error {
 	}
 
 	return nil
+}
+
+// MoveToTrash detaches the worktree from git without paying for the deletion
+// of its contents. `git worktree remove -f` unlinks every file one by one,
+// which on a large worktree (a Rust target/ or node_modules tree is easily
+// 100k files) takes tens of seconds. Instead the directory is renamed into the
+// trash dir — a constant-time rename, since trash/ sits on the same filesystem
+// as worktrees/ — and git's now-dangling metadata is pruned.
+//
+// The returned path still holds the full contents; the caller is responsible
+// for deleting it in the background (or leaving it for SweepTrash on the next
+// startup). Falls back to a plain Remove if the rename is not possible.
+func (g *GitWorktree) MoveToTrash() (string, error) {
+	trashPath, err := MovePathToTrash(g.worktreePath)
+	if err != nil {
+		// Different filesystem, permissions, ... — fall back to the slow path
+		// rather than leaving the worktree in place.
+		log.WarningLog.Printf("could not move worktree %s to trash (%v); falling back to git worktree remove",
+			g.worktreePath, err)
+		if removeErr := g.Remove(); removeErr != nil {
+			return "", removeErr
+		}
+		return "", g.Prune()
+	}
+
+	if err := g.Prune(); err != nil {
+		// The worktree directory is already gone, so the session is effectively
+		// paused; report the error but still hand back the trash path so the
+		// caller can free the disk space.
+		return trashPath, err
+	}
+	return trashPath, nil
+}
+
+// MovePathToTrash renames path into the trash directory and returns its new
+// location. The rename is constant-time regardless of how much the directory
+// holds, so callers can get out of the way of a slow delete and hand the
+// returned path to a background RemoveAll.
+func MovePathToTrash(path string) (string, error) {
+	trashDir, err := config.GetTrashDir()
+	if err != nil {
+		return "", fmt.Errorf("failed to get trash directory: %w", err)
+	}
+	if err := os.MkdirAll(trashDir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create trash directory: %w", err)
+	}
+
+	trashPath := filepath.Join(trashDir,
+		fmt.Sprintf("%s-%d", filepath.Base(path), time.Now().UnixNano()))
+	if err := os.Rename(path, trashPath); err != nil {
+		return "", fmt.Errorf("failed to move %s to trash: %w", path, err)
+	}
+	return trashPath, nil
+}
+
+// DeleteTrashPath removes a path previously handed out by MovePathToTrash,
+// logging how long the delete took. Intended to be run in its own goroutine.
+func DeleteTrashPath(trashPath string) {
+	start := time.Now()
+	if err := os.RemoveAll(trashPath); err != nil {
+		log.ErrorLog.Printf("failed to delete trashed worktree %s: %v", trashPath, err)
+		return
+	}
+	log.InfoLog.Printf("deleted trashed worktree %s in %s", trashPath, time.Since(start))
+}
+
+// SweepTrash deletes everything left in the trash directory. Deletes are slow
+// and are deliberately not awaited during a pause, so a crash or a quit can
+// leave entries behind; this reclaims them. Safe to call concurrently with an
+// in-flight delete — an entry that another goroutine already removed is
+// skipped.
+func SweepTrash() {
+	trashDir, err := config.GetTrashDir()
+	if err != nil {
+		return
+	}
+	entries, err := os.ReadDir(trashDir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		path := filepath.Join(trashDir, entry.Name())
+		if err := os.RemoveAll(path); err != nil {
+			log.WarningLog.Printf("could not sweep trash entry %s: %v", path, err)
+		}
+	}
 }
 
 // Prune removes all working tree administrative files and directories

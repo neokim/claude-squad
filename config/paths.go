@@ -14,6 +14,7 @@ const (
 	userHomeConfigDirName = ".claude-squad"
 	repoConfigDirName     = ".claude-squad"
 	worktreesSubdir       = "worktrees"
+	trashSubdir           = "trash"
 )
 
 // GetUserHomeConfigDir returns ~/.claude-squad. Currently used only as the
@@ -91,6 +92,18 @@ func GetWorktreesBaseDir() (string, error) {
 		return "", err
 	}
 	return filepath.Join(home, worktreesSubdir, GetRepoID(root)), nil
+}
+
+// GetTrashDir returns ~/.claude-squad/trash. Worktrees being discarded are
+// renamed into here so the (potentially very slow) recursive delete can happen
+// off the critical path. It is a sibling of worktrees/ — same filesystem, so
+// the rename is atomic — but outside it, so worktree enumeration ignores it.
+func GetTrashDir() (string, error) {
+	home, err := GetUserHomeConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, trashSubdir), nil
 }
 
 // EnsureRepoConfigDir creates the per-repo config dir and, on first creation,

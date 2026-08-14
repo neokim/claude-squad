@@ -95,6 +95,13 @@ type List struct {
 	selectedIdx   int
 	scrollOffset  int
 	height, width int
+
+	// freeScroll is set while the user scrolls the list directly (mouse wheel).
+	// The viewport then stays put instead of following the selection. Any change
+	// of the selection clears it, so moving the cursor scrolls it back into view.
+	freeScroll      bool
+	lastSelectedIdx int
+
 	renderer      *InstanceRenderer
 	autoyes       bool
 
@@ -370,8 +377,18 @@ func (l *List) String() string {
 	if len(rendered) == 0 {
 		return lipgloss.Place(l.width, l.height, lipgloss.Left, lipgloss.Top, b.String())
 	}
+	// A selection change cancels free scrolling so the viewport follows the cursor again.
+	if l.selectedIdx != l.lastSelectedIdx {
+		l.lastSelectedIdx = l.selectedIdx
+		l.freeScroll = false
+	}
+	if l.scrollOffset >= len(rendered) {
+		l.scrollOffset = len(rendered) - 1
+	}
 	// Adjust scroll offset to keep the selected item visible.
-	l.adjustScrollOffset(rendered, availableLines)
+	if !l.freeScroll {
+		l.adjustScrollOffset(rendered, availableLines)
+	}
 
 	// Render only items that fit within the viewport.
 	// Note: "\n\n" between items adds 2 newline chars but only 1 visible line,
@@ -473,6 +490,25 @@ func (l *List) adjustScrollOffset(rendered []listRenderedItem, availableLines in
 		linesUsed -= rendered[l.scrollOffset].lines + 1 // remove item + its trailing separator
 		l.scrollOffset++
 	}
+}
+
+// ScrollUp scrolls the viewport up by one item, leaving the selection alone.
+func (l *List) ScrollUp() {
+	if l.scrollOffset > 0 {
+		l.scrollOffset--
+		l.freeScroll = true
+	}
+}
+
+// ScrollDown scrolls the viewport down by one item, leaving the selection alone.
+// clampScrollOffset stops it once the last item reaches the bottom of the viewport.
+func (l *List) ScrollDown() {
+	if l.scrollOffset >= len(l.items)-1 {
+		return
+	}
+	l.scrollOffset++
+	l.clampScrollOffset()
+	l.freeScroll = true
 }
 
 // Down selects the next item in the list. Wraps to top when at the bottom.

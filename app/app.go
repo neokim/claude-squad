@@ -305,21 +305,19 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tickUpdateMetadataCmd(m.snapshotActiveInstances(), m.list.GetSelectedInstance())
 	case tea.MouseMsg:
-		// Handle mouse wheel events: over the session list it moves the
-		// selection, elsewhere it scrolls the diff/preview pane.
+		// Handle mouse wheel events: over the session list it scrolls the list
+		// viewport (leaving the selection where it is), elsewhere it scrolls the
+		// diff/preview pane.
 		if msg.Action == tea.MouseActionPress {
 			if msg.Button == tea.MouseButtonWheelDown || msg.Button == tea.MouseButtonWheelUp {
 				if msg.X < m.listWidth {
-					if m.list.NumInstances() == 0 {
-						return m, nil
-					}
 					switch msg.Button {
 					case tea.MouseButtonWheelUp:
-						m.list.Up()
+						m.list.ScrollUp()
 					case tea.MouseButtonWheelDown:
-						m.list.Down()
+						m.list.ScrollDown()
 					}
-					return m, m.instanceChanged()
+					return m, nil
 				}
 
 				selected := m.list.GetSelectedInstance()

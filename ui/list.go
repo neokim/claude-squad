@@ -20,12 +20,6 @@ const pausedIcon = "⏸ "
 var readyStyle = lipgloss.NewStyle().
 	Foreground(lipgloss.AdaptiveColor{Light: "#51bd73", Dark: "#51bd73"})
 
-var addedLinesStyle = lipgloss.NewStyle().
-	Foreground(lipgloss.AdaptiveColor{Light: "#51bd73", Dark: "#51bd73"})
-
-var removedLinesStyle = lipgloss.NewStyle().
-	Foreground(lipgloss.Color("#de613e"))
-
 var pausedStyle = lipgloss.NewStyle().
 	Foreground(lipgloss.AdaptiveColor{Light: "#888888", Dark: "#888888"})
 
@@ -234,38 +228,10 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool, h
 		join,
 	))
 
-	stat := i.GetDiffStats()
-
-	var diff string
-	var addedDiff, removedDiff string
-	if stat == nil || stat.Error != nil || stat.IsEmpty() {
-		// Don't show diff stats if there's an error or if they don't exist
-		addedDiff = ""
-		removedDiff = ""
-		diff = ""
-	} else {
-		addedDiff = fmt.Sprintf("+%d", stat.Added)
-		removedDiff = fmt.Sprintf("-%d ", stat.Removed)
-		diff = lipgloss.JoinHorizontal(
-			lipgloss.Center,
-			addedLinesStyle.Background(descS.GetBackground()).Render(addedDiff),
-			lipgloss.Style{}.Background(descS.GetBackground()).Foreground(descS.GetForeground()).Render(","),
-			removedLinesStyle.Background(descS.GetBackground()).Render(removedDiff),
-		)
-	}
-
 	remainingWidth := r.width
 	remainingWidth -= runewidth.StringWidth(prefix)
 	remainingWidth -= runewidth.StringWidth(branchIcon)
 	remainingWidth -= 2 // for the literal " " and "-" in the branchLine format string
-
-	diffWidth := runewidth.StringWidth(addedDiff) + runewidth.StringWidth(removedDiff)
-	if diffWidth > 0 {
-		diffWidth += 1
-	}
-
-	// Use fixed width for diff stats to avoid layout issues
-	remainingWidth -= diffWidth
 
 	branch := i.Branch
 	if i.Started() && hasMultipleRepos {
@@ -296,7 +262,7 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool, h
 		spaces = strings.Repeat(" ", remainingWidth)
 	}
 
-	branchLine := fmt.Sprintf("%s %s-%s%s%s", strings.Repeat(" ", len(prefix)), branchIcon, branch, spaces, diff)
+	branchLine := fmt.Sprintf("%s %s-%s%s", strings.Repeat(" ", len(prefix)), branchIcon, branch, spaces)
 
 	// join title and subtitle
 	text := lipgloss.JoinVertical(

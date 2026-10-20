@@ -60,9 +60,6 @@ type Instance struct {
 	// Prompt is the initial prompt to pass to the instance on startup
 	Prompt string
 
-	// DiffStats stores the current git diff statistics
-	diffStats *git.DiffStats
-
 	// selectedBranch is the existing branch to start on (empty = new branch from HEAD)
 	selectedBranch string
 
@@ -110,15 +107,6 @@ func (i *Instance) ToInstanceData() InstanceData {
 		}
 	}
 
-	// Only include diff stats if they exist
-	if i.diffStats != nil {
-		data.DiffStats = DiffStatsData{
-			Added:   i.diffStats.Added,
-			Removed: i.diffStats.Removed,
-			Content: i.diffStats.Content,
-		}
-	}
-
 	return data
 }
 
@@ -142,11 +130,6 @@ func FromInstanceData(data InstanceData) (*Instance, error) {
 			data.Worktree.BaseCommitSHA,
 			data.Worktree.IsExistingBranch,
 		),
-		diffStats: &git.DiffStats{
-			Added:   data.DiffStats.Added,
-			Removed: data.DiffStats.Removed,
-			Content: data.DiffStats.Content,
-		},
 	}
 
 	if instance.Inactive() {
@@ -688,10 +671,10 @@ func (i *Instance) Rename(newTitle string) error {
 	return nil
 }
 
-// Inactive reports whether the instance has no live worktree to diff and no
-// tmux pane to capture, which is true both once it is Paused and while it is
-// still Pausing. Callers use it to decide whether to touch the session at all;
-// compare Status directly when a specific one of the two is meant.
+// Inactive reports whether the instance has no tmux pane to capture, which is
+// true both once it is Paused and while it is still Pausing. Callers use it to
+// decide whether to touch the session at all; compare Status directly when a
+// specific one of the two is meant.
 func (i *Instance) Inactive() bool {
 	return i.Status == Paused || i.Status == Pausing
 }
@@ -913,63 +896,6 @@ func (i *Instance) RestartInstance() error {
 		return fmt.Errorf("failed to resume during restart: %w", err)
 	}
 	return nil
-}
-
-// UpdateDiffStats updates the git diff statistics for this instance
-func (i *Instance) UpdateDiffStats() error {
-	if !i.started {
-		i.diffStats = nil
-		return nil
-	}
-
-	if i.Inactive() {
-		// Keep the previous diff stats if the instance is paused
-		return nil
-	}
-
-	stats := i.gitWorktree.Diff()
-	if stats.Error != nil {
-		if strings.Contains(stats.Error.Error(), "base commit SHA not set") {
-			// Worktree is not fully set up yet, not an error
-			i.diffStats = nil
-			return nil
-		}
-		return fmt.Errorf("failed to get diff stats: %w", stats.Error)
-	}
-
-	i.diffStats = stats
-	return nil
-}
-
-// ComputeDiff runs the expensive git diff I/O and returns the result without
-// mutating instance state. Safe to call from a background goroutine.
-func (i *Instance) ComputeDiff() *git.DiffStats {
-	if !i.started || i.Inactive() {
-		return nil
-	}
-	return i.gitWorktree.Diff()
-}
-
-// ComputeDiffNumstat runs a lightweight git diff --numstat and returns only the
-// added/removed line counts (Content is left empty). Safe to call from a
-// background goroutine. Use this for instances whose full diff content is not
-// currently needed so we avoid keeping large diffs in memory.
-func (i *Instance) ComputeDiffNumstat() *git.DiffStats {
-	if !i.started || i.Inactive() {
-		return nil
-	}
-	return i.gitWorktree.DiffNumstat()
-}
-
-// SetDiffStats sets the diff statistics on the instance. Should be called from
-// the main event loop to avoid data races with View.
-func (i *Instance) SetDiffStats(stats *git.DiffStats) {
-	i.diffStats = stats
-}
-
-// GetDiffStats returns the current git diff statistics
-func (i *Instance) GetDiffStats() *git.DiffStats {
-	return i.diffStats
 }
 
 // SendPrompt sends a prompt to the tmux session

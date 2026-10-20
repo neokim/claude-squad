@@ -28,7 +28,7 @@ const (
 	KeyAttachExternal  // Open a new OS terminal window attached to the tmux session
 	KeyRestartInstance // Restart the selected instance (commit, kill tmux+claude, restart fresh)
 
-	// Diff keybindings
+	// Scroll keybindings
 	KeyShiftUp
 	KeyShiftDown
 

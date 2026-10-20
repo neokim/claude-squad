@@ -396,39 +396,44 @@ func (i *Instance) Attach() (chan struct{}, error) {
 // tmux session as an additional client. The original claude-squad TUI keeps its
 // own connection — this gives the user a separate window viewing the same
 // session.
-func (i *Instance) AttachExternal() error {
+//
+// The instance checks run on the caller's goroutine; the returned func only
+// runs osascript, which can block for a while, so callers may run it in the
+// background.
+func (i *Instance) AttachExternal() (func() error, error) {
 	if !i.started {
-		return fmt.Errorf("cannot attach: instance has not been started yet")
+		return nil, fmt.Errorf("cannot attach: instance has not been started yet")
 	}
 	if i.Status == Loading {
-		return fmt.Errorf("cannot attach: instance is still loading")
+		return nil, fmt.Errorf("cannot attach: instance is still loading")
 	}
 	if i.Status == Pausing {
-		return fmt.Errorf("cannot attach: instance is still pausing")
+		return nil, fmt.Errorf("cannot attach: instance is still pausing")
 	}
 	if i.Status == Paused {
-		return fmt.Errorf("cannot attach: instance is paused (resume it first with 'r')")
+		return nil, fmt.Errorf("cannot attach: instance is paused (resume it first with 'r')")
 	}
 	if !i.tmuxSession.DoesSessionExist() {
-		return fmt.Errorf("cannot attach: tmux session is not alive")
+		return nil, fmt.Errorf("cannot attach: tmux session is not alive")
 	}
 
 	sessionName := i.tmuxSession.GetSessionName()
 	tmuxBin, err := exec.LookPath("tmux")
 	if err != nil {
-		return fmt.Errorf("tmux binary not found: %w", err)
+		return nil, fmt.Errorf("tmux binary not found: %w", err)
 	}
-	attachCmd := fmt.Sprintf("%s attach -t %s", shellQuote(tmuxBin), shellQuote(sessionName))
+	// "=" makes tmux match the session name exactly instead of by prefix.
+	attachCmd := fmt.Sprintf("%s attach -t %s", shellQuote(tmuxBin), shellQuote("="+sessionName))
 
 	if runtime.GOOS != "darwin" {
-		return fmt.Errorf("opening external terminal is only supported on macOS")
+		return nil, fmt.Errorf("opening external terminal is only supported on macOS")
 	}
 
 	termProgram := os.Getenv("TERM_PROGRAM")
-	var script string
+	var tellBlock string
 	switch termProgram {
 	case "iTerm.app":
-		script = fmt.Sprintf(
+		tellBlock = fmt.Sprintf(
 			`tell application "iTerm"
 				activate
 				create window with default profile command %s
@@ -438,7 +443,7 @@ func (i *Instance) AttachExternal() error {
 	default:
 		// Apple_Terminal or unknown — default to Terminal.app, which is always
 		// present on macOS.
-		script = fmt.Sprintf(
+		tellBlock = fmt.Sprintf(
 			`tell application "Terminal"
 				activate
 				do script %s
@@ -446,12 +451,25 @@ func (i *Instance) AttachExternal() error {
 			appleScriptQuote(attachCmd),
 		)
 	}
+	// Without a timeout a wedged terminal app makes osascript wait ~2 minutes.
+	script := fmt.Sprintf("with timeout of 10 seconds\n%s\nend timeout", tellBlock)
 
-	cmd := exec.Command("osascript", "-e", script)
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to open external terminal: %w", err)
-	}
-	return nil
+	return func() error {
+		out, err := exec.Command("osascript", "-e", script).CombinedOutput()
+		if err == nil {
+			return nil
+		}
+		// osascript reports e.g. "0:94: execution error: AppleEvent timed out. (-1712)";
+		// keep only the cause so it survives the error box's truncation.
+		msg := strings.TrimSpace(string(out))
+		if _, cause, ok := strings.Cut(msg, "execution error: "); ok {
+			msg = cause
+		}
+		if msg == "" {
+			msg = err.Error()
+		}
+		return fmt.Errorf("failed to open external terminal: %s", msg)
+	}, nil
 }
 
 // shellQuote wraps s in single quotes for safe use in a /bin/sh command line.

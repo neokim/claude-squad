@@ -76,7 +76,7 @@ func TestRestartInstance_RejectedWhilePausing(t *testing.T) {
 func TestAttachExternal_RejectedWhilePausing(t *testing.T) {
 	i := &Instance{Title: "test", Status: Pausing, started: true}
 
-	if err := i.AttachExternal(); err == nil {
+	if _, err := i.AttachExternal(); err == nil {
 		t.Fatal("expected AttachExternal() to fail while pausing")
 	}
 }

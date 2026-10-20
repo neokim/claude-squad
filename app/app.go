@@ -995,10 +995,13 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		if selected == nil {
 			return m, nil
 		}
-		if err := selected.AttachExternal(); err != nil {
+		open, err := selected.AttachExternal()
+		if err != nil {
 			return m, m.handleError(err)
 		}
-		return m, nil
+		// osascript can block for a while (e.g. a wedged iTerm), so run it off
+		// the Update loop; a returned error is routed to handleError.
+		return m, func() tea.Msg { return open() }
 	case keys.KeyRestartInstance:
 		selected := m.list.GetSelectedInstance()
 		if selected == nil || selected.Status == session.Loading || selected.Status == session.Paused {

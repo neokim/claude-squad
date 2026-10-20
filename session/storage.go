@@ -19,9 +19,8 @@ type InstanceData struct {
 	UpdatedAt time.Time `json:"updated_at"`
 	AutoYes   bool      `json:"auto_yes"`
 
-	Program   string          `json:"program"`
-	Worktree  GitWorktreeData `json:"worktree"`
-	DiffStats DiffStatsData   `json:"diff_stats"`
+	Program  string          `json:"program"`
+	Worktree GitWorktreeData `json:"worktree"`
 }
 
 // GitWorktreeData represents the serializable data of a GitWorktree
@@ -32,13 +31,6 @@ type GitWorktreeData struct {
 	BranchName       string `json:"branch_name"`
 	BaseCommitSHA    string `json:"base_commit_sha"`
 	IsExistingBranch bool   `json:"is_existing_branch"`
-}
-
-// DiffStatsData represents the serializable data of a DiffStats
-type DiffStatsData struct {
-	Added   int    `json:"added"`
-	Removed int    `json:"removed"`
-	Content string `json:"content"`
 }
 
 // Storage handles saving and loading instances using the state interface

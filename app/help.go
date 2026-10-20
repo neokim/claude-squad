@@ -58,8 +58,8 @@ func (h helpTypeGeneral) toContent() string {
 		keyStyle.Render("S")+descStyle.Render("         - Restart instance (commit changes, restart tmux+claude, auto-attach)"),
 		"",
 		headerStyle.Render("Other:"),
-		keyStyle.Render("tab")+descStyle.Render("       - Switch between preview, diff, and terminal tabs"),
-		keyStyle.Render("shift-↓/↑")+descStyle.Render(" - Scroll in preview/diff/terminal view"),
+		keyStyle.Render("tab")+descStyle.Render("       - Switch between preview and terminal tabs"),
+		keyStyle.Render("shift-↓/↑")+descStyle.Render(" - Scroll in preview/terminal view"),
 		keyStyle.Render("q")+descStyle.Render("         - Quit the application"),
 	)
 	return content
@@ -77,7 +77,7 @@ func (h helpTypeInstanceStart) toContent() string {
 		"",
 		headerStyle.Render("Managing:"),
 		keyStyle.Render("↵/o")+descStyle.Render("   - Attach to the session to interact with it directly"),
-		keyStyle.Render("tab")+descStyle.Render("   - Switch preview panes to view session diff"),
+		keyStyle.Render("tab")+descStyle.Render("   - Switch between preview and terminal tabs"),
 		keyStyle.Render("D")+descStyle.Render("     - Kill (delete) the selected session"),
 		"",
 		headerStyle.Render("Handoff:"),

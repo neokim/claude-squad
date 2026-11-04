@@ -65,6 +65,12 @@ const TmuxBasePrefix = "claudesquad_"
 
 var whiteSpaceRegex = regexp.MustCompile(`\s+`)
 
+// osc8Regex matches OSC 8 hyperlink sequences, terminated by BEL or ST.
+// capture-pane -e emits them, but our line truncation, wrapping and overlay
+// code doesn't understand them and leaves a link open, which makes the outer
+// terminal underline everything drawn after it.
+var osc8Regex = regexp.MustCompile(`\x1b\]8;[^\x07\x1b]*(?:\x07|\x1b\\)`)
+
 // tmuxPrefix returns "claudesquad_<repo-id>_" for the current repo, or
 // TmuxBasePrefix as a fallback when not inside a git repo (mainly for tests
 // running outside the source tree).
@@ -489,7 +495,7 @@ func (t *TmuxSession) CapturePaneContent() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("error capturing pane content: %v", err)
 	}
-	return string(output), nil
+	return osc8Regex.ReplaceAllString(string(output), ""), nil
 }
 
 // CapturePaneContentWithOptions captures the pane content with additional options
@@ -501,7 +507,7 @@ func (t *TmuxSession) CapturePaneContentWithOptions(start, end string) (string, 
 	if err != nil {
 		return "", fmt.Errorf("failed to capture tmux pane content with options: %v", err)
 	}
-	return string(output), nil
+	return osc8Regex.ReplaceAllString(string(output), ""), nil
 }
 
 // CleanupSessions kills tmux sessions belonging to the current repo. Sessions

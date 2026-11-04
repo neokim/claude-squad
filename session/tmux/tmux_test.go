@@ -89,3 +89,25 @@ func TestStartTmuxSession(t *testing.T) {
 	_, err = ptyFactory.files[1].Stat()
 	require.NoError(t, err)
 }
+
+func TestCapturePaneContentStripsHyperlinks(t *testing.T) {
+	raw := "\x1b[31mred\x1b[0m " +
+		"\x1b]8;;file:///a/b.go\x1b\\b.go\x1b]8;;\x1b\\ " +
+		"\x1b]8;id=x;https://example.com\x07site\x1b]8;;\x07"
+	cmdExec := cmd_test.MockCmdExec{
+		RunFunc: func(cmd *exec.Cmd) error { return nil },
+		OutputFunc: func(cmd *exec.Cmd) ([]byte, error) {
+			return []byte(raw), nil
+		},
+	}
+	session := newTmuxSession("test-session", "claude", NewMockPtyFactory(t), cmdExec)
+
+	want := "\x1b[31mred\x1b[0m b.go site"
+	got, err := session.CapturePaneContent()
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+
+	got, err = session.CapturePaneContentWithOptions("-", "-")
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+}
